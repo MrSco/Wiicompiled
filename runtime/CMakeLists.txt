@@ -585,9 +585,10 @@ else()
             "${CMAKE_CURRENT_LIST_DIR}/.." "${CMAKE_CURRENT_LIST_DIR}/../aurora-main/include")
         target_compile_features(mkw_android_native_compile PRIVATE cxx_std_20)
         target_compile_definitions(mkw_android_native_compile PRIVATE TARGET_PC)
+        # mkw_mbedtls: network_ssl.cpp, the TLS backend the Android products link.
         target_link_libraries(mkw_android_native_compile PRIVATE
             aurora::gx aurora::pad aurora::si aurora::vi aurora::mtx
-            mkw::pugixml mkw::toml11 mkw::cryptopp mkw::libco)
+            mkw::pugixml mkw::toml11 mkw::cryptopp mkw::libco mkw_mbedtls)
         if(MKW_ENABLE_OPENXR)
             target_link_libraries(mkw_android_native_compile PRIVATE ${MKW_OPENXR_TARGET})
         endif()
