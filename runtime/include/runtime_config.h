@@ -39,7 +39,8 @@
 
 struct RuntimeUserConfig {
     std::optional<bool> widescreen;
-    std::optional<bool> forceAspect169;
+    std::optional<bool> forceAspect;
+    bool legacyForceAspect = false;
     std::optional<int32_t> windowPosX;
     std::optional<int32_t> windowPosY;
     std::optional<uint32_t> windowWidth;
@@ -50,6 +51,7 @@ struct RuntimeUserConfig {
     std::optional<uint32_t> frameInterpolationFps;
     std::optional<bool> metalFxSpatialUpscaling;
     std::optional<bool> skipUnreadyPipelines;
+    std::optional<bool> vsync;
     std::optional<bool> disableCopyFilter;
     std::optional<bool> textureReplacements;
     std::optional<bool> textureDumps;
@@ -125,8 +127,10 @@ struct RuntimeUserConfig {
     std::optional<bool> audioMixWorker;
     std::optional<bool> attenuateMusicWhenMediaPlays;
     // Real Wii Remotes (with or without Nunchuk / Classic Controller) and Wii U Pro
-    // Controllers paired over Bluetooth, driven by SDL's HIDAPI Wii driver. The driver
-    // is opt-in on SDL's side, so this decides whether the runtime turns it on.
+    // Controllers paired over Bluetooth, driven by SDL's HIDAPI Wii driver into this fork's
+    // KPAD/WPAD HLE (which the VR controllers also feed). The driver is opt-in on SDL's side,
+    // so this decides whether the runtime turns it on. Upstream's emulated Bluetooth stack
+    // (hle/bluetooth, wiimote/) is built but stays dormant behind that HLE.
     std::optional<bool> wiiRemotes;
     // Keep re-enumerating Bluetooth HID devices while no Wii controller is connected
     // (Dolphin's "continuous scanning"), so a remote that dropped or was switched on
@@ -144,6 +148,17 @@ struct RuntimeUserConfig {
     // Debugging aid: append every KPAD sample of the Bluetooth remote (raw and
     // corrected accelerometer, buttons) to wii_accel_trace.csv next to Config.toml.
     std::optional<bool> wiiAccelTrace;
+    // Look for remotes in pairing mode (1+2 / SYNC) while none is connected.
+    std::optional<bool> wiiAutoPair;
+    // The console's Wii Remote settings (SYSCONF BT.BAR, BT.SENS, BT.SPKV, BT.MOT).
+    std::optional<bool> wiiSensorBarAbove;
+    std::optional<int32_t> wiiIrSensitivity;
+    std::optional<int32_t> wiiSpeakerVolume;
+    std::optional<bool> wiiRumble;
+    // Outside a Steam launch, ask a running Steam client for a game controller layout while
+    // the window has focus instead of its desktop one (buttons bound to mouse and keyboard).
+    std::optional<bool> steamInputOverride;
+    std::optional<uint32_t> steamInputAppId;
     std::optional<bool> networkEnabled;
     std::optional<bool> discordPresenceEnabled;
     // The application ID of the WiiCompiled Discord application. This is only
@@ -161,6 +176,9 @@ struct RuntimeUserConfig {
     // "dpad_up,left_shoulder") as values; pressing either bound button counts.
     std::array<std::optional<std::string>, 12> controllerButtons;
     std::optional<bool> rumbleEnabled;
+    // Shake a motion controller to press the D-pad, like shaking a Wii Remote.
+    std::optional<bool> motionTrick;
+    std::optional<int32_t> motionTrickSensitivity;
     std::optional<int32_t> muteHotkey;
     std::map<std::string, std::string> controllerExpressions;
 };
@@ -592,12 +610,13 @@ inline void EnsureConfigFile() {
               "# Set paths.dvd_root to an extracted Mario Kart Wii DATA directory.\n\n"
               "[video]\n"
               "widescreen = true\n"
-              "force_16_9 = false\n"
+              "force_aspect = false\n"
               "resolution_multiplier = 1.0\n"
               "frame_interpolation_fps = 0\n"
               "display_mode = \"windowed\"\n"
               "graphics_api = \"auto\"\n"
               "skip_unready_pipelines = true\n"
+              "vsync = false\n"
               "disable_copy_filter = true\n"
               "show_fps = false\n"
               "# Run the host side of the GX pipeline (state tracking, FIFO parsing,\n"
@@ -798,6 +817,9 @@ inline void EnsureConfigFile() {
               "mix_worker = true\n\n"
               "[network]\n"
               "enabled = true\n\n"
+              "[controller]\n"
+              "steam_input_override = true\n"
+              "# steam_input_app_id = 480\n\n"
               "[discord]\n"
               "# Rich Presence talks only to a locally-running Discord client.\n"
               "# Retro Rewind supplies its official app ID automatically. Set this\n"
@@ -870,7 +892,6 @@ inline void AppendOverlayRoots(RuntimeUserConfig& config, const std::string& roo
     }
 }
 
-// Reads every supported setting out of a parsed Config.toml document.
 // [x, y, z] of finite numbers (integers allowed), else nullopt.
 inline std::optional<std::array<double, 3>> ParseAccelOffset(const toml::value& value) {
     if (!value.is_array() || value.as_array().size() != 3) {
@@ -893,6 +914,7 @@ inline std::optional<std::array<double, 3>> ParseAccelOffset(const toml::value& 
     return offset;
 }
 
+// Reads every supported setting out of a parsed Config.toml document.
 inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     RuntimeUserConfig config;
 
@@ -905,6 +927,10 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
 
     config.rumbleEnabled = FindConfigValue<bool>(document, "controller", "rumble");
+    config.motionTrick = FindConfigValue<bool>(document, "controller", "motion_trick");
+    if (const auto value = FindConfigInt(document, "controller", "motion_trick_sensitivity"); value && *value >= 1 && *value <= 5) {
+        config.motionTrickSensitivity = *value;
+    }
     if (auto value = FindConfigInt(document, "audio", "mute_key")) {
         config.muteHotkey = *value;
     }
@@ -926,7 +952,15 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
 
     config.widescreen = FindConfigValue<bool>(document, "video", "widescreen");
-    config.forceAspect169 = FindConfigValue<bool>(document, "video", "force_16_9");
+    config.forceAspect = FindConfigValue<bool>(document, "video", "force_aspect");
+    if (!config.forceAspect) {
+        // Legacy key; it always forced a 16:9 game.
+        config.forceAspect = FindConfigValue<bool>(document, "video", "force_16_9");
+        config.legacyForceAspect = config.forceAspect.has_value();
+        if (config.forceAspect.value_or(false)) {
+            config.widescreen = true;
+        }
+    }
     config.windowPosX = FindConfigInt(document, "video", "window_x");
     config.windowPosY = FindConfigInt(document, "video", "window_y");
     if (auto value = FindConfigUint(document, "video", "window_width"); value && *value != 0) {
@@ -960,6 +994,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.metalFxSpatialUpscaling =
         FindConfigValue<bool>(document, "video", "metalfx_spatial_upscaling");
     config.skipUnreadyPipelines = FindConfigValue<bool>(document, "video", "skip_unready_pipelines");
+    config.vsync = FindConfigValue<bool>(document, "video", "vsync");
     config.disableCopyFilter = FindConfigValue<bool>(document, "video", "disable_copy_filter");
     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
     config.gxThread = FindConfigValue<bool>(document, "video", "gx_thread");
@@ -1122,6 +1157,21 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
         config.hasLegacyWiiAccelOffset |= FindConfigValue<double>(document, "controller", key).value_or(0.0) != 0.0;
     }
     config.wiiAccelTrace = FindConfigValue<bool>(document, "controller", "wii_accel_trace");
+    config.wiiAutoPair = FindConfigValue<bool>(document, "controller", "wii_auto_pair");
+    if (const auto bar = FindConfigValue<std::string>(document, "controller", "wii_sensor_bar")) {
+        if (*bar == "above" || *bar == "below") config.wiiSensorBarAbove = *bar == "above";
+    }
+    if (const auto value = FindConfigInt(document, "controller", "wii_ir_sensitivity"); value && *value >= 1 && *value <= 5) {
+        config.wiiIrSensitivity = *value;
+    }
+    if (const auto value = FindConfigInt(document, "controller", "wii_speaker_volume"); value && *value >= 0 && *value <= 127) {
+        config.wiiSpeakerVolume = *value;
+    }
+    config.wiiRumble = FindConfigValue<bool>(document, "controller", "wii_rumble");
+    config.steamInputOverride = FindConfigValue<bool>(document, "controller", "steam_input_override");
+    if (const auto value = FindConfigUint(document, "controller", "steam_input_app_id"); value && *value != 0) {
+        config.steamInputAppId = *value;
+    }
     config.networkEnabled = FindConfigValue<bool>(document, "network", "enabled");
     config.discordPresenceEnabled = FindConfigValue<bool>(document, "discord", "enabled");
     config.discordClientId = FindConfigValue<std::string>(document, "discord", "client_id");
@@ -1325,6 +1375,11 @@ inline bool SetDisplayMode(std::string value) {
 inline bool SetSkipUnreadyPipelines(bool value) {
     Mutable().skipUnreadyPipelines = value;
     return WriteSetting("video", "skip_unready_pipelines", value ? "true" : "false");
+}
+
+inline bool SetVsync(bool value) {
+    Mutable().vsync = value;
+    return WriteSetting("video", "vsync", value ? "true" : "false");
 }
 
 inline bool SetDisableCopyFilter(bool value) {
@@ -1722,6 +1777,24 @@ inline bool SetRumbleEnabled(bool value) {
     return WriteSetting("controller", "rumble", value ? "true" : "false");
 }
 
+inline bool MotionTrickEnabled(bool fallback = false) {
+    return Get().motionTrick.value_or(fallback);
+}
+
+inline bool SetMotionTrickEnabled(bool value) {
+    Mutable().motionTrick = value;
+    return WriteSetting("controller", "motion_trick", value ? "true" : "false");
+}
+
+inline int32_t MotionTrickSensitivity(int32_t fallback = 3) {
+    return Get().motionTrickSensitivity.value_or(fallback);
+}
+
+inline bool SetMotionTrickSensitivity(int32_t value) {
+    Mutable().motionTrickSensitivity = value;
+    return WriteSetting("controller", "motion_trick_sensitivity", std::to_string(value));
+}
+
 inline int32_t MuteHotkey(int32_t fallback) {
     return Get().muteHotkey.value_or(fallback);
 }
@@ -1790,13 +1863,30 @@ inline bool WidescreenEnabled(bool fallback = false) {
     return Get().widescreen.value_or(fallback);
 }
 
-inline bool ForceAspect169Enabled(bool fallback = false) {
-    return Get().forceAspect169.value_or(fallback);
+inline bool ForceAspectEnabled(bool fallback = false) {
+    return Get().forceAspect.value_or(fallback);
 }
 
-inline bool SetForceAspect169(bool value) {
-    Mutable().forceAspect169 = value;
-    return WriteSetting("video", "force_16_9", value ? "true" : "false");
+inline bool SetForceAspect(bool value) {
+    Mutable().forceAspect = value;
+    return WriteSetting("video", "force_aspect", value ? "true" : "false");
+}
+
+// The in-memory value stays as booted; SCGetAspectRatio must not change mid-session.
+inline bool SetWidescreen(bool value) {
+    return WriteSetting("video", "widescreen", value ? "true" : "false");
+}
+
+// Rewrites a legacy force_16_9 as force_aspect plus the widescreen it implied.
+inline void MigrateLegacyForceAspect() {
+    if (!Get().legacyForceAspect) {
+        return;
+    }
+    const bool force = ForceAspectEnabled();
+    if ((!force || WriteSetting("video", "widescreen", "true")) &&
+        WriteSetting("video", "force_aspect", force ? "true" : "false")) {
+        Mutable().legacyForceAspect = false;
+    }
 }
 
 inline bool WindowPosition(int32_t& x, int32_t& y) {
@@ -1858,16 +1948,17 @@ inline bool AttenuateMusicWhenMediaPlays(bool fallback = false) {
     return Get().attenuateMusicWhenMediaPlays.value_or(fallback);
 }
 
-// Bluetooth Wii Remotes / Wii U Pro Controllers. Read once before SDL's joystick
-// subsystem comes up, so a change only takes effect on the next launch.
-inline bool WiiRemotesEnabled(bool fallback = true) {
+// Bluetooth Wii Remotes / Wii U Pro Controllers through SDL. Read once before SDL's joystick
+// subsystem comes up, so a change only takes effect on the next launch. The runtime passes
+// true as the fallback: this fork turns the driver on unless the config says otherwise.
+inline bool WiiRemotesEnabled(bool fallback = false) {
     return Get().wiiRemotes.value_or(fallback);
 }
 
-// Persists the Bluetooth Wii Remote driver switch.
 inline bool SetWiiRemotesEnabled(bool value) {
+    if (!WriteSetting("controller", "wii_remotes", value ? "true" : "false")) return false;
     Mutable().wiiRemotes = value;
-    return WriteSetting("controller", "wii_remotes", value ? "true" : "false");
+    return true;
 }
 
 // Whether to keep rescanning Bluetooth while no Wii controller is connected.
@@ -1905,6 +1996,61 @@ inline bool SetWiiAccelOffsetFor(const std::string& remoteKey, const std::array<
     return WriteSetting("controller.wii_accel_offsets", remoteKey, formatted.str());
 }
 
+inline bool SteamInputOverrideEnabled(bool fallback = true) {
+    return Get().steamInputOverride.value_or(fallback);
+}
+
+// Spacewar, Valve's Steamworks sample app, available to every Steam account.
+inline uint32_t SteamInputAppId(uint32_t fallback = 480) {
+    return Get().steamInputAppId.value_or(fallback);
+}
+
+inline bool WiiAutoPairEnabled(bool fallback = true) {
+    return Get().wiiAutoPair.value_or(fallback);
+}
+
+inline bool SetWiiAutoPairEnabled(bool value) {
+    Mutable().wiiAutoPair = value;
+    return WriteSetting("controller", "wii_auto_pair", value ? "true" : "false");
+}
+
+// Defaults are the console's.
+inline bool WiiSensorBarAbove(bool fallback = false) {
+    return Get().wiiSensorBarAbove.value_or(fallback);
+}
+
+inline bool SetWiiSensorBarAbove(bool value) {
+    Mutable().wiiSensorBarAbove = value;
+    return WriteSetting("controller", "wii_sensor_bar", value ? "\"above\"" : "\"below\"");
+}
+
+inline int32_t WiiIrSensitivity(int32_t fallback = 3) {
+    return Get().wiiIrSensitivity.value_or(fallback);
+}
+
+inline bool SetWiiIrSensitivity(int32_t value) {
+    Mutable().wiiIrSensitivity = value;
+    return WriteSetting("controller", "wii_ir_sensitivity", std::to_string(value));
+}
+
+inline int32_t WiiSpeakerVolume(int32_t fallback = 0x59) {
+    return Get().wiiSpeakerVolume.value_or(fallback);
+}
+
+inline bool SetWiiSpeakerVolume(int32_t value) {
+    Mutable().wiiSpeakerVolume = value;
+    return WriteSetting("controller", "wii_speaker_volume", std::to_string(value));
+}
+
+inline bool WiiRumbleEnabled(bool fallback = true) {
+    return Get().wiiRumble.value_or(fallback);
+}
+
+inline bool SetWiiRumbleEnabled(bool value) {
+    Mutable().wiiRumble = value;
+    return WriteSetting("controller", "wii_rumble", value ? "true" : "false");
+}
+
 // Target frame rate for frame interpolation, or 0 to disable it.
 inline uint32_t FrameInterpolationFps(uint32_t fallback = 0) {
     return Get().frameInterpolationFps.value_or(fallback);
@@ -1913,6 +2059,10 @@ inline uint32_t FrameInterpolationFps(uint32_t fallback = 0) {
 // Whether to skip draws whose graphics pipeline has not finished compiling yet.
 inline bool SkipUnreadyPipelines(bool fallback = true) {
     return Get().skipUnreadyPipelines.value_or(fallback);
+}
+
+inline bool Vsync(bool fallback = false) {
+    return Get().vsync.value_or(fallback);
 }
 
 inline bool DisableCopyFilter(bool fallback = true) {
@@ -2343,6 +2493,9 @@ inline void LogLoadedConfig() {
             }
             if (config.skipUnreadyPipelines) {
                 std::cout << " skip_unready_pipelines=" << (*config.skipUnreadyPipelines ? "true" : "false");
+            }
+            if (config.vsync) {
+                std::cout << " vsync=" << (*config.vsync ? "true" : "false");
             }
             if (config.disableCopyFilter) {
                 std::cout << " disable_copy_filter=" << (*config.disableCopyFilter ? "true" : "false");

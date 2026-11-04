@@ -8,6 +8,7 @@
 
 #include "vr/mkw_vr_culling.h"
 
+#include "guest_function_imports.h"
 #include "hle_stubs.h"
 #include "isa/ppc_isa_context.h"
 #include "memory.h"
@@ -108,16 +109,21 @@ int32_t Nw4rFrustumIntersectAabbEx(uint32_t frustum, uint32_t aabb) {
 }
 
 // Guest functions UpdateScreenInfo calls, unchanged translated code.
-constexpr uint32_t kPSMTXInverse = 0x80199FC8u;
-constexpr uint32_t kNw4rSinCosFIdx = 0x800851E0u;
-constexpr uint32_t kNw4rVec3TransformNormal = 0x80085AB0u;
-constexpr uint32_t kClipInfoMgrNormalizeVector = 0x807872C0u;
-constexpr uint32_t kClipInfoMgrWidenPlane = 0x807DEBCCu;
-constexpr uint32_t kClipInfoMgrGetArea8And9GroupIDs = 0x80786FC0u;
+const uint32_t kPSMTXInverse = MKW_GADDR(80199FC8);
+const uint32_t kNw4rSinCosFIdx = MKW_GADDR(800851E0);
+const uint32_t kNw4rVec3TransformNormal = MKW_GADDR(80085AB0);
+const uint32_t kClipInfoMgrNormalizeVector = MKW_GADDR(807872C0);
+const uint32_t kClipInfoMgrWidenPlane = MKW_GADDR(807DEBCC);
+const uint32_t kClipInfoMgrGetArea8And9GroupIDs = MKW_GADDR(80786FC0);
 // The four float constants UpdateScreenInfo reads (its r30 table) and the
 // reference vector it hands the plane-widening helper (its r31).
-constexpr uint32_t kClipConstants = 0x808A4808u;
-constexpr uint32_t kClipReferenceVector = 0x802A4130u;
+// guest_versions.inc knows no NTSC-U counterpart of the constants table (StaticR .data), so
+// there it is 0 and the game's own UpdateScreenInfo runs instead (see the registration below).
+const uint32_t kClipConstants = [] {
+    const GuestRegion::Mapping mapping = GuestRegion::Map(0x808A4808u, GuestRegion::Current());
+    return mapping.found ? mapping.address : 0u;
+}();
+const uint32_t kClipReferenceVector = MKW_GADDR(802A4130);
 // The original's stack frame, laid out as it uses it.
 constexpr uint32_t kFrameBytes = 0xA0u;
 constexpr uint32_t kFrameCos = 0x08u;
@@ -168,6 +174,14 @@ void CrossProduct(uint32_t a_addr, uint32_t b_addr, uint32_t out_addr) noexcept 
 // single-precision operations in between mirror the original instruction by
 // instruction. With culling off the six plane normals are zeroed afterwards,
 // so ClipInfoMgr::Update finds nothing beyond a plane.
+void ZeroScreenPlanesUnlessCulling(uint32_t screen) noexcept {
+    if (!mkw::vr::MkwVRObjectCullingEnabled()) {
+        for (uint32_t offset = 0; offset < mkw::vr::kClipScreenPlanesBytes; offset += 4u) {
+            MemoryInline::FlatWriteRam32(screen + mkw::vr::kClipScreenPlanesOffset + offset, 0u);
+        }
+    }
+}
+
 void ClipInfoMgrUpdateScreenInfo(uint32_t screen, uint32_t camera) {
 #if defined(__clang__)
 #pragma clang fp contract(off)
@@ -271,17 +285,25 @@ void ClipInfoMgrUpdateScreenInfo(uint32_t screen, uint32_t camera) {
     ctx->gpr[1] = caller_sp;
     ctx->lr = caller_lr;
 
-    if (!mkw::vr::MkwVRObjectCullingEnabled()) {
-        for (uint32_t offset = 0; offset < mkw::vr::kClipScreenPlanesBytes; offset += 4u) {
-            MemoryInline::FlatWriteRam32(screen + mkw::vr::kClipScreenPlanesOffset + offset, 0u);
-        }
-    }
+    ZeroScreenPlanesUnlessCulling(screen);
 }
 
 } // namespace
 
 PPC_NATIVE_OVERRIDE(80086610, Nw4rFrustumIntersectAabbEx, int32_t, (uint32_t frustum, uint32_t aabb), (frustum, aabb));
-PPC_NATIVE_OVERRIDE_VOID(8078707C, ClipInfoMgrUpdateScreenInfo, (uint32_t screen, uint32_t camera), (screen, camera));
+
+// A raw registration keeps the base translation, which runs where the running region has no
+// known address for the constants table (kClipConstants), followed by the same plane override.
+extern "C" void ClipInfoMgr_UpdateScreenInfo_8078707c(CpuContext* ctx) {
+    const uint32_t screen = ctx->gpr[3];
+    if (kClipConstants == 0) {
+        MKW_GUEST_FUNC(8078707C)(ctx);
+        ZeroScreenPlanesUnlessCulling(screen);
+        return;
+    }
+    ClipInfoMgrUpdateScreenInfo(screen, ctx->gpr[4]);
+}
+REGISTER_NATIVE_FUNCTION_AS(0x8078707C, ClipInfoMgr_UpdateScreenInfo_8078707c, "ClipInfoMgr_UpdateScreenInfo_8078707c");
 
 #if defined(__clang__)
 #pragma float_control(pop)

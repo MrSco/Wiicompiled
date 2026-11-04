@@ -5,7 +5,8 @@ param(
     [string]$PortableToolsDirectory = 'Launcher/artifacts/portable-tools',
     [string]$DependencySourceDirectory = 'Launcher/artifacts/dependencies',
     [string]$StageDirectory = 'build/recomp-test',
-    [ValidateRange(1, 64)] [int]$Parallel = 3
+    [ValidateRange(1, 64)] [int]$Parallel = 3,
+    [ValidateSet('v2', 'v3')] [string]$X86CpuProfile = 'v3'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,6 +37,7 @@ Write-Host "Synthetic recompilation workspace: $stage"
 
 # Copy current sources, including uncommitted edits, but no ignored build output.
 # An isolated workspace preserves the developer's real generated/ directory.
+# This fork vendors Aurora (with its VR stereo renderer) in aurora-main, so one listing covers both.
 $sourceFiles = & git -C $repoRoot -c core.quotepath=false ls-files --cached --others --exclude-standard -- runtime aurora-main
 if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate runtime and Aurora sources.' }
 foreach ($relative in $sourceFiles | Sort-Object -Unique) {
@@ -45,16 +47,10 @@ foreach ($relative in $sourceFiles | Sort-Object -Unique) {
 }
 
 # One synthetic text section: li r3,40; addi r3,r3,2; nop; blr.
-# Native HLE and VR wrappers also call these guest symbols directly. Give each
-# its own generated blr function so the real product can link without game code.
-# Keep this list explicit: a new unresolved guest dependency must fail the test.
+# Guest functions the runtime calls directly resolve through the registry at run time, so the
+# product links without any game code.
 [uint32]$entry = 0x80001000L
-[uint32[]]$guestCallbacks = @(
-    0x8012B830L, 0x801A0620L, 0x801A1ED8L, 0x801A961CL,
-    0x801AADE0L, 0x801D8D30L, 0x801D9E94L, 0x8055531CL,
-    0x8056A470L, 0x8056A580L, 0x805A6C58L
-)
-$textSize = [int]($guestCallbacks[-1] - $entry + 4)
+$textSize = 0x10
 $dataOffset = 0x100 + $textSize
 $dol = [byte[]]::new($dataOffset + 4)
 function Write-BigEndian32([int]$Offset, [uint32]$Value) {
@@ -65,7 +61,7 @@ function Write-BigEndian32([int]$Offset, [uint32]$Value) {
 }
 Write-BigEndian32 0x00 0x100       # text[0] file offset
 Write-BigEndian32 0x48 $entry      # text[0] guest address
-Write-BigEndian32 0x90 $textSize   # text[0] length (unreachable gaps are zero)
+Write-BigEndian32 0x90 $textSize   # text[0] length
 Write-BigEndian32 0x1C $dataOffset # data[0] file offset
 Write-BigEndian32 0x64 0x80600000L # data[0] guest address
 Write-BigEndian32 0xAC 4           # data[0] length
@@ -76,13 +72,10 @@ Write-BigEndian32 0x100 0x38600028 # li r3,40
 Write-BigEndian32 0x104 0x38630002 # addi r3,r3,2
 Write-BigEndian32 0x108 0x60000000 # nop
 Write-BigEndian32 0x10C 0x4E800020 # blr
-foreach ($address in $guestCallbacks) {
-    Write-BigEndian32 ([int](0x100 + $address - $entry)) 0x4E800020
-}
 Write-BigEndian32 $dataOffset 0x12345678
 [IO.File]::WriteAllBytes((Join-Path $stage 'synthetic.dol'), $dol)
-$entryPoints = (@($entry) + $guestCallbacks | ForEach-Object { '0x{0:X8}' -f $_ }) -join ', '
-$functionMap = (@($entry) + $guestCallbacks | ForEach-Object { '{0:X8} func_{0:X8}' -f $_ }) -join "`n"
+$entryPoints = '0x{0:X8}' -f $entry
+$functionMap = '{0:X8} func_{0:X8}' -f $entry
 [IO.File]::WriteAllText((Join-Path $stage 'synthetic-functions.txt'), $functionMap)
 $manifest = Join-Path $stage 'recomp.yml'
 [IO.File]::WriteAllText($manifest, @"
@@ -120,7 +113,7 @@ Invoke-Checked $dotnet @($translator, 'translate-recursive', '0x80001000', '--pr
     'Translating the synthetic DOL'
 # Function-map seeds can be skipped by discovery; do not accept a partial fixture.
 $translated = Get-Content -LiteralPath $metadata -Raw | ConvertFrom-Json
-foreach ($address in @($entry) + $guestCallbacks) {
+foreach ($address in @($entry)) {
     if ($address -notin $translated.functions.entryPoint) {
         throw ('Synthetic function 0x{0:X8} was not translated.' -f $address)
     }
@@ -136,7 +129,8 @@ try {
         -Ninja $ninja -CCompiler (Join-Path $compilerBin 'x86_64-w64-mingw32-clang.exe') `
         -CxxCompiler (Join-Path $compilerBin 'x86_64-w64-mingw32-clang++.exe') `
         -ResourceCompiler (Join-Path $compilerBin 'x86_64-w64-mingw32-windres.exe') `
-        -DependenciesDirectory $dependencies -AdditionalArguments @('-DMKW_BUILD_PRODUCTS=ON', '-DMKW_ENABLE_OPENXR=ON')
+        -DependenciesDirectory $dependencies -AdditionalArguments @('-DMKW_BUILD_PRODUCTS=ON', '-DMKW_ENABLE_OPENXR=ON',
+            "-DMKW_X86_CPU_PROFILE=$X86CpuProfile")
     Invoke-Checked $cmake $configure 'Configuring the production Windows runtime' `
         -WaitForProcessTree $false
     Invoke-Checked $cmake @('--build', $nativeBuild, '--target', 'WiiCompiled', '--parallel', "$Parallel") `

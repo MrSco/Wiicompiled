@@ -2,6 +2,7 @@
 
 #include "vr/mkw_vr_instrumentation.h"
 
+#include "guest_abi/guest_region.h"
 #include "memory.h"
 #include "ppc_runtime.h"
 #include "runtime_log.h"
@@ -19,14 +20,16 @@ extern "C" int g_gxFrameCount;
 namespace mkw::vr {
 namespace {
 
-constexpr uint32_t kRaceSceneOnEnter = 0x80553C50u;
-constexpr uint32_t kRaceSceneOnExit = 0x805549B0u;
-constexpr uint32_t kRaceCameraUpdate = 0x805A21D0u;
-constexpr uint32_t kScnMgrRaceDraw = 0x805B1CD8u;
+// Observer targets by PAL identity; MkwVRObserveTranslatedFunctionEntry receives the running
+// region's address. Only projects/mkwii/recomp.yml (PAL) declares the observers today.
+const uint32_t kRaceSceneOnEnter = MKW_GADDR(80553C50);
+const uint32_t kRaceSceneOnExit = MKW_GADDR(805549B0);
+const uint32_t kRaceCameraUpdate = MKW_GADDR(805A21D0);
+const uint32_t kScnMgrRaceDraw = MKW_GADDR(805B1CD8);
 // PAL RMCP01 RaceScene::GetScreenCount (0x80554F68) reads the active
 // RaceScene pointer from this SDA-backed slot, then returns byte 0x25. Keep
 // this synchronized with projects/mkwii/MAP.txt and the generated function.
-constexpr uint32_t kRaceSceneInstanceAddress = 0x809BD728u;
+const uint32_t kRaceSceneInstanceAddress = MKW_GADDR(809BD728);
 constexpr uint32_t kRaceSceneScreenCountOffset = 0x25u;
 
 struct InstrumentationState {
@@ -162,8 +165,7 @@ extern "C" void MkwVRObserveTranslatedFunctionEntry(uint32_t address,
                                                       const CpuContext* context) noexcept {
     using namespace mkw::vr;
     const uint64_t frame = GuestFrame();
-    switch (address) {
-    case kRaceSceneOnEnter: {
+    if (address == kRaceSceneOnEnter) {
         {
             std::lock_guard lock(g_instrumentation_mutex);
             g_instrumentation = {};
@@ -174,17 +176,13 @@ extern "C" void MkwVRObserveTranslatedFunctionEntry(uint32_t address,
         MkwVRFirstPersonReset();
         RT_LOG(RT_TAG_RUNTIME) << "[mkw-vr] entered RaceScene at frame " << frame
                                << std::endl;
-        break;
-    }
-    case kRaceCameraUpdate: {
+    } else if (address == kRaceCameraUpdate) {
         const uint32_t camera_address = context != nullptr ? context->gpr[3] : 0;
         ObserveCamera(frame, camera_address);
         if (camera_address == FirstCamera(frame)) {
             PublishObservedCamera(frame, camera_address);
         }
-        break;
-    }
-    case kScnMgrRaceDraw: {
+    } else if (address == kScnMgrRaceDraw) {
         // RaceCamera objects are not a player-count source: the game may update
         // additional cameras for transitions and effects. Use the same exact
         // screen count as RaceScene::GetScreenCount, while retaining the camera
@@ -198,9 +196,7 @@ extern "C" void MkwVRObserveTranslatedFunctionEntry(uint32_t address,
         // the frame's draws have been issued yet, so the values behind these
         // pointers are exactly the ones those draws will use.
         MkwVRFirstPersonUpdate(frame, FirstCamera(frame));
-        break;
-    }
-    case kRaceSceneOnExit: {
+    } else if (address == kRaceSceneOnExit) {
         MkwVRSceneObservation scene{};
         scene.mode = VRSceneMode::Other;
         scene.guest_frame_index = frame;
@@ -212,9 +208,5 @@ extern "C" void MkwVRObserveTranslatedFunctionEntry(uint32_t address,
         aurora_request_geometry_cache_clear();
         RT_LOG(RT_TAG_RUNTIME) << "[mkw-vr] exited RaceScene at frame " << frame
                                << std::endl;
-        break;
-    }
-    default:
-        break;
     }
 }

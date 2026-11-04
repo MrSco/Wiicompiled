@@ -302,71 +302,47 @@ static inline void mark_pipeline_state_dirty() noexcept {
       }                                                                                                                \
   } while (0)
 
-static bool copy_xf_data(u32 addr, const u8* data, u32 len, bool bigEndian) {
-  if (addr < 0x78) {
+// XF memory is linear: a load may start anywhere inside a matrix and run across matrices.
+static bool store_xf_matrix_word(u32 addr, f32 value) noexcept {
+  if (addr < 0x078) {
     // Position matrices (0x0000 - 0x0077)
-    u32 mtxIdx = addr / 12;
-    u32 startOffset = addr % 12;
-    // We only support full writes to matrices
-    XF_REQUIRE(mtxIdx < MaxPnMtx, "XF: PosMtx copy oob; mtxIdx={}", mtxIdx);
-    XF_REQUIRE(startOffset == 0 && len == 12, "XF: PosMtx sub-copy unsupported: offs={}, len={}", startOffset, len);
-    auto& mtx = g_gxState.pnMtx[mtxIdx].pos;
-    f32* flat = reinterpret_cast<f32*>(&mtx);
-    for (u32 i = 0; i < len; i++) {
-      flat[i] = read_f32(data + i * 4, bigEndian);
-    }
-    g_gxState.stateDirty = true;
+    reinterpret_cast<f32*>(&g_gxState.pnMtx[addr / 12].pos)[addr % 12] = value;
     return true;
-  } else if (addr < 0x0F0) {
-    // Texture matrices (0x078-0x0EF)
-    u32 texBase = addr - 0x078;
-    u32 mtxIdx = texBase / 12;
-    u32 startOffset = texBase % 12;
-    XF_REQUIRE(mtxIdx < MaxTexMtx, "XF TexMtx copy oob; mtxIdx={}", mtxIdx);
-    XF_REQUIRE(startOffset == 0 && (len == 8 || len == 12), "XF TexMtx sub-copy unsupported: offs={}, len={}",
-               startOffset, len);
-
-    // Determine if 2x4 or 3x4 from count
-    auto& mtx = g_gxState.texMtxs[mtxIdx];
-    f32* flat = reinterpret_cast<f32*>(&mtx);
-    for (u32 i = 0; i < len; i++) {
-      flat[i] = read_f32(data + i * 4, bigEndian);
-    }
-    g_gxState.stateDirty = true;
+  }
+  if (addr < 0x0F0) {
+    // Texture matrices (0x078-0x0EF), 2x4 or 3x4
+    const u32 offs = addr - 0x078;
+    reinterpret_cast<f32*>(&g_gxState.texMtxs[offs / 12])[offs % 12] = value;
     return true;
-  } else if (addr >= 0x400 && addr < 0x45A) {
-    // Normal matrices (0x400-0x459)
-    u32 nrmBase = addr - 0x400;
-    u32 mtxIdx = nrmBase / 9;
-    u32 startOffset = nrmBase % 9;
-    // We only support full writes to matrices
-    XF_REQUIRE(mtxIdx < MaxPnMtx, "XF: NrmMtx copy oob; mtxIdx={}", mtxIdx);
-    XF_REQUIRE(startOffset == 0 && len == 9, "XF: NrmMtx sub-copy unsupported: offs={}, len={}", startOffset, len);
-    auto& mtx = g_gxState.pnMtx[mtxIdx].nrm;
-    f32* flat = reinterpret_cast<f32*>(&mtx);
-    for (u32 i = 0; i < len; i++) {
-      u32 xfIdx = i;
-      u32 row = xfIdx / 3;
-      u32 col = xfIdx % 3;
-      if (row < 3) {
-        flat[row * 4 + col] = read_f32(data + i * 4, bigEndian);
-      }
-    }
-    g_gxState.stateDirty = true;
+  }
+  if (addr >= 0x400 && addr < 0x45A) {
+    // Normal matrices (0x400-0x459): 3x3 source packed into 3x4 storage
+    const u32 offs = addr - 0x400;
+    const u32 elem = offs % 9;
+    reinterpret_cast<f32*>(&g_gxState.pnMtx[offs / 9].nrm)[(elem / 3) * 4 + elem % 3] = value;
     return true;
-  } else if (addr >= 0x500 && addr < 0x5F0) {
+  }
+  if (addr >= 0x500 && addr < 0x5F0) {
     // Post-transform texture matrices (0x500-0x5EF)
-    u32 ptBase = addr - 0x500;
-    u32 mtxIdx = ptBase / 12;
-    u32 startOffset = ptBase % 12;
-    XF_REQUIRE(mtxIdx < MaxPTTexMtx, "XF: PTTexMtx copy oob; mtxIdx={}", mtxIdx);
-    XF_REQUIRE(startOffset == 0 && len == 12, "XF: PTTexMtx sub-copy unsupported: offs={}, len={}", startOffset, len);
-    auto& mtx = g_gxState.ptTexMtxs[mtxIdx];
-    f32* flat = reinterpret_cast<f32*>(&mtx);
+    const u32 offs = addr - 0x500;
+    reinterpret_cast<f32*>(&g_gxState.ptTexMtxs[offs / 12])[offs % 12] = value;
+    return true;
+  }
+  return false;
+}
+
+static bool is_xf_matrix_addr(u32 addr) noexcept {
+  return addr < 0x0F0 || (addr >= 0x400 && addr < 0x45A) || (addr >= 0x500 && addr < 0x5F0);
+}
+
+static bool copy_xf_data(u32 addr, const u8* data, u32 len, bool bigEndian) {
+  if (is_xf_matrix_addr(addr)) {
+    bool stored = true;
     for (u32 i = 0; i < len; i++) {
-      flat[startOffset + i] = read_f32(data + i * 4, bigEndian);
+      stored &= store_xf_matrix_word(addr + i, read_f32(data + i * 4, bigEndian));
     }
     g_gxState.stateDirty = true;
+    XF_REQUIRE(stored, "XF: matrix copy leaves matrix memory: addr={:#x}, len={}", addr, len);
     return true;
   } else if (addr >= 0x600 && addr < 0x680) {
     // Lights (0x600-0x67F) - 8 lights, 16 values each
@@ -2355,7 +2331,7 @@ static std::optional<gfx::stereo_replay::SubviewRect> screen_rect(GXPrimitive pr
         point[c] = std::ldexp(point[c], -int(attr.frac));
     }
     const uint32_t matrixIndex =
-        g_gxState.vtxDesc[GX_VA_PNMTXIDX] == GX_DIRECT ? vertex[0] / 3u : g_gxState.currentPnMtx;
+        g_gxState.vtxDesc[GX_VA_PNMTXIDX] == GX_DIRECT ? (vertex[0] & 0x3fu) / 3u : g_gxState.currentPnMtx;
     if (matrixIndex >= g_gxState.pnMtx.size())
       return {};
     const auto& matrix = g_gxState.pnMtx[matrixIndex].pos;
@@ -2434,7 +2410,8 @@ static uint16_t pn_mtx_mask(const uint8_t* vertices, uint16_t vtxCount, uint32_t
   }
   uint16_t mask = 0;
   for (uint16_t vertex = 0; vertex < vtxCount; ++vertex) {
-    const uint32_t matrixIndex = vertices[static_cast<size_t>(vertex) * vtxStride] / 3u;
+    // GX matrix indices are six bits.
+    const uint32_t matrixIndex = (vertices[static_cast<size_t>(vertex) * vtxStride] & 0x3fu) / 3u;
     if (matrixIndex < MaxPnMtx) {
       mask |= static_cast<uint16_t>(1u << matrixIndex);
     }
@@ -2456,10 +2433,11 @@ static PnMtxUsage pn_mtx_usage(const uint8_t* vertices, uint16_t vtxCount, uint3
   topologyHasher.update(vtxCount);
   uint16_t mask = 0;
   for (uint16_t vertex = 0; vertex < vtxCount; ++vertex) {
-    // GX matrix-index attributes precede every other vertex attribute and are always one byte.
-    const uint8_t rawMatrixIndex = vertices[static_cast<size_t>(vertex) * vtxStride];
-    topologyHasher.update(rawMatrixIndex);
-    const uint32_t matrixIndex = rawMatrixIndex / 3u;
+    // GX matrix-index attributes precede every other vertex attribute and are always one byte, of
+    // which the hardware reads six bits.
+    const uint8_t matrixRow = vertices[static_cast<size_t>(vertex) * vtxStride] & 0x3fu;
+    topologyHasher.update(matrixRow);
+    const uint32_t matrixIndex = matrixRow / 3u;
     if (matrixIndex < MaxPnMtx) {
       mask |= static_cast<uint16_t>(1u << matrixIndex);
     }

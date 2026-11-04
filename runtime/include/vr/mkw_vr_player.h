@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "guest_abi/guest_region.h"
+
 #include <cstdint>
 
 namespace mkw::vr::detail {
@@ -16,14 +18,14 @@ struct LocalPlayerKartRead {
     uint32_t accessor = 0;
 };
 
-// PAL RMCP01. Use the same screen-to-racer mapping as RaceCameraMgr::__ct
+// Addresses by PAL RMCP01 identity. Use the same screen-to-racer mapping as RaceCameraMgr::__ct
 // (0x805A8468), not a kart-array slot or a search for a non-CPU racer.
 // The memory provider is injectable so the actual pointer walk can be tested
 // without a running guest. Production uses Memory's checked, big-endian reads.
 template <typename GuestMemory>
 LocalPlayerKartRead ReadLocalPlayerKart() noexcept {
     // Racedata::CreateInstance (0x8052FE58): 0x809C0000 - 10456.
-    constexpr uint32_t kRaceDataInstanceAddress = 0x809BD728u;
+    const uint32_t kRaceDataInstanceAddress = MKW_GADDR(809BD728);
     // Racedata::GetPlayerIdOfLocalPlayer (0x80531F70): byte +2948 + screen.
     constexpr uint32_t kHudPlayerIdsOffset = 0xB84u;
     // Active race scenario, not the menu scenario. GetRacePlayerCount
@@ -38,7 +40,7 @@ LocalPlayerKartRead ReadLocalPlayerKart() noexcept {
     constexpr uint32_t kMaxPlayers = 12;
     // Kart::Manager::CreateInstance (0x8058FAA8), GetKartPlayer (0x80590100),
     // and Kart::Link's shared proxy -> accessor link.
-    constexpr uint32_t kKartManagerInstanceAddress = 0x809C18F8u;
+    const uint32_t kKartManagerInstanceAddress = MKW_GADDR(809C18F8);
     constexpr uint32_t kKartManagerPlayersOffset = 0x20u;
 
     LocalPlayerKartRead read{};

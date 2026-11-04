@@ -1,4 +1,5 @@
 #include "gx_thread.h"
+#include "perf_stats.h"
 #include "runtime_log.h"
 #include <atomic>
 #include <chrono>
@@ -181,6 +182,8 @@ void WaitWithCallback(std::condition_variable& cv, std::atomic<bool>& waitingFla
     waitingFlag.store(true, std::memory_order_release);
     while (true) {
         {
+            // MKW_PERF_STATS counts this as game-thread wait; the callback below is not.
+            PerfStats::WaitScope wait;
             std::unique_lock<std::mutex> lock(g_mutex);
             if (cv.wait_for(lock, std::chrono::milliseconds(2), pred)) {
                 break;
@@ -385,6 +388,7 @@ void Drain() {
                              [&] { return g_fenceCompleted.load(std::memory_order_acquire) >= sequence; });
             break;
         }
+        PerfStats::WaitScope wait;
         std::this_thread::yield();
     }
     g_statDrainWaitNs += ElapsedNs(started);

@@ -7,6 +7,7 @@
 #include "input_bindings.h"
 #include "game_graphics_options.h"
 #include "log_export.h"
+#include "motion_trick.h"
 #include "physical_wheel.h"
 #include "music_attenuation.h"
 #include "runtime_config.h"
@@ -136,6 +137,7 @@ int g_displayMode = [] {
     return static_cast<int>(AURORA_DISPLAY_MODE_WINDOWED);
 }();
 bool g_skipUnreadyPipelines = RuntimeConfigFile::SkipUnreadyPipelines(true);
+bool g_vsync = RuntimeConfigFile::Vsync();
 bool g_disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
 bool g_showFps = RuntimeConfigFile::ShowFps();
 // The same default the VR path itself takes (kVrEnabledDefault), so the F10 switch
@@ -288,7 +290,8 @@ bool g_vrResetArmed = false;
 float g_vrLeanBackDegrees = RuntimeConfigFile::VrLeanBackDegrees();
 // [vr] render_scale as the slider shows it, in percent of the headset's recommended size.
 int g_vrRenderScalePercent = static_cast<int>(std::lround(RuntimeConfigFile::VrRenderScale() * 100.0f));
-bool g_forceAspect169 = RuntimeConfigFile::ForceAspect169Enabled();
+bool g_forceAspect = RuntimeConfigFile::ForceAspectEnabled();
+bool g_widescreen = RuntimeConfigFile::WidescreenEnabled(true);
 #if defined(__APPLE__)
 bool g_metalFxSpatialUpscaling = RuntimeConfigFile::MetalFxSpatialUpscaling(false);
 #endif
@@ -961,6 +964,69 @@ void DrawVrControllerSettings() {
     }
 }
 
+const char* TrickDirectionLabel(MotionTrick::Direction direction) {
+    switch (direction) {
+    case MotionTrick::Direction::Up: return "up";
+    case MotionTrick::Direction::Down: return "down";
+    case MotionTrick::Direction::Left: return "left";
+    case MotionTrick::Direction::Right: return "right";
+    default: return "";
+    }
+}
+
+void DrawMotionTrickSettings(uint32_t port) {
+    const MotionTrick::PortStatus status = MotionTrick::Status(port);
+    const bool hasMotion = MotionTrick::PortHasMotion(port) && !status.sensorsUnavailable;
+    bool enabled = MotionTrick::Enabled();
+    ImGui::BeginDisabled(!hasMotion && !enabled);
+    if (ImGui::Checkbox("Shake to trick", &enabled)) {
+        MotionTrick::SetEnabled(enabled);
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip(hasMotion
+            ? "Flick the controller to trick off ramps, or to wheelie on a bike, like shaking a Wii Remote.\n"
+              "The flick direction picks the trick. The D-pad keeps working. Applies to every player."
+            : "Steam Input can hide a controller's motion sensor; turn it off for this game to use it here.");
+    }
+    if (!hasMotion) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(no motion sensor)");
+        return;
+    }
+    if (!enabled) {
+        return;
+    }
+
+    ImGui::Indent();
+    int sensitivity = MotionTrick::Sensitivity();
+    ImGui::SetNextItemWidth(Scaled(160.0f));
+    if (ImGui::SliderInt("Sensitivity##motion", &sensitivity, MotionTrick::kMinSensitivity,
+                         MotionTrick::kMaxSensitivity, "%d", ImGuiSliderFlags_AlwaysClamp)) {
+        MotionTrick::SetSensitivity(sensitivity);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Higher reacts to smaller flicks. Lower it if you trick or wheelie by accident while steering.");
+    }
+
+    constexpr float kMeterScale = 1.5f;
+    const ImVec2 meterPos = ImGui::GetCursorScreenPos();
+    const ImVec2 meterSize(Scaled(160.0f), ImGui::GetFrameHeight() * 0.6f);
+    ImGui::ProgressBar(std::min(status.intensity / kMeterScale, 1.0f), meterSize, "");
+    const float thresholdX = meterPos.x + meterSize.x / kMeterScale;
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(thresholdX, meterPos.y), ImVec2(thresholdX, meterPos.y + meterSize.y),
+                                        ImGui::GetColorU32(ImGuiCol_Text), 2.0f);
+    ImGui::SameLine();
+    const bool recent = status.lastTrick != MotionTrick::Direction::None &&
+                        MotionTrick::NowUs() - status.lastTrickUs < 700'000;
+    if (recent) {
+        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "Trick! (%s)", TrickDirectionLabel(status.lastTrick));
+    } else {
+        ImGui::TextDisabled("Flick to test");
+    }
+    ImGui::Unindent();
+}
+
 void DrawControllerSettings() {
     // First, since the per-port settings below stop early when a port has nothing to show.
     DrawVrControllerSettings();
@@ -1023,6 +1089,9 @@ void DrawControllerSettings() {
         ImGui::TextDisabled("The game reads this controller as a Wii Remote, so the button mapping does not apply.");
         DrawRumbleSettings();
         return;
+    }
+    if (PADGetIndexForPort(selectedGamePort) >= 0) {
+        DrawMotionTrickSettings(selectedGamePort);
     }
 
     uint32_t mappingCount = 0;
@@ -1441,11 +1510,22 @@ void DrawVrSteeringWheelSettings() {
 
 void DrawGraphicsSettings() {
     g_displayMode = static_cast<int>(aurora_get_display_mode());
-    if (ImGui::Checkbox("Force 16:9", &g_forceAspect169)) {
-        SetMkwForceAspect169(g_forceAspect169);
-        RuntimeConfigFile::SetForceAspect169(g_forceAspect169);
+    if (ImGui::BeginCombo("Aspect ratio (restart required)", g_widescreen ? "16:9" : "4:3")) {
+        if (ImGui::Selectable("16:9", g_widescreen)) {
+            g_widescreen = true;
+            RuntimeConfigFile::SetWidescreen(true);
+        }
+        if (ImGui::Selectable("4:3", !g_widescreen)) {
+            g_widescreen = false;
+            RuntimeConfigFile::SetWidescreen(false);
+        }
+        ImGui::EndCombo();
     }
-    ImGui::TextDisabled("Keep a 16:9 image with black bars when the window has another shape.");
+    if (ImGui::Checkbox("Force aspect ratio", &g_forceAspect)) {
+        SetMkwForceAspect(g_forceAspect);
+        RuntimeConfigFile::SetForceAspect(g_forceAspect);
+    }
+    ImGui::TextDisabled("Keep the current aspect ratio with black bars when the window has another shape.");
     ImGui::Separator();
     struct EffectFlag {
         const char* label;
@@ -1558,6 +1638,13 @@ void DrawGraphicsSettings() {
     if (ImGui::Checkbox("Skip draws while shaders compile", &g_skipUnreadyPipelines)) {
         aurora_set_skip_unready_pipelines(g_skipUnreadyPipelines);
         RuntimeConfigFile::SetSkipUnreadyPipelines(g_skipUnreadyPipelines);
+    }
+    if (ImGui::Checkbox("VSync", &g_vsync)) {
+        aurora_enable_vsync(g_vsync);
+        RuntimeConfigFile::SetVsync(g_vsync);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("The desktop window only. A headset paces itself and is never affected.");
     }
     if (ImGui::Checkbox("Show FPS", &g_showFps)) {
         RuntimeConfigFile::SetShowFps(g_showFps);
@@ -2519,6 +2606,7 @@ void DrawStartupScreen() {
         const float startY = std::max(0.0f, (viewport->Size.y - titleSize.y) * 0.5f);
         ImGui::SetCursorPos(ImVec2(titleX, startY));
         ImGui::TextUnformatted(kTitle);
+        float nextY = startY + titleSize.y + 12.0f;
         if (g_bootShaderNotice && !g_bootShadersReady.load(std::memory_order_relaxed)) {
             ImGui::SetWindowFontScale(0.9f);
             char line[96];
@@ -2527,7 +2615,13 @@ void DrawStartupScreen() {
             const float lineX = std::max(0.0f, (viewport->Size.x - ImGui::CalcTextSize(line).x) * 0.5f);
             ImGui::SetCursorPos(ImVec2(lineX, startY + titleSize.y * 1.8f));
             ImGui::TextUnformatted(line);
+            nextY = ImGui::GetCursorPosY() + 4.0f;
         }
+        constexpr const char* kHint = "Press F10 to open settings";
+        ImGui::SetWindowFontScale(0.8f);
+        const ImVec2 hintSize = ImGui::CalcTextSize(kHint);
+        ImGui::SetCursorPos(ImVec2(std::max(0.0f, (viewport->Size.x - hintSize.x) * 0.5f), nextY));
+        ImGui::TextUnformatted(kHint);
     }
     ImGui::End();
     ImGui::PopStyleVar();
@@ -2628,6 +2722,7 @@ void DrawTopBar() {
         ImGui::EndMenu();
     }
 
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), ImVec2(FLT_MAX, ImGui::GetMainViewport()->Size.y * 0.75f));
     if (ImGui::BeginMenu("Controller settings")) {
         DrawControllerSettings();
         // Nest capture under this menu so opening/closing the modal preserves
@@ -2666,6 +2761,18 @@ void DrawTopBar() {
         g_exitPromptOpen = true;
     }
     ImGui::EndMainMenuBar();
+}
+
+// Steam's desktop layout maps B to Escape on Valve controllers.
+bool ValveControllerConnected() {
+    int count = 0;
+    SDL_JoystickID* ids = SDL_GetJoysticks(&count);
+    bool found = false;
+    for (int i = 0; ids != nullptr && i < count && !found; ++i) {
+        found = SDL_GetJoystickVendorForID(ids[i]) == 0x28DE && SDL_GetJoystickProductForID(ids[i]) != 0x11FF;
+    }
+    SDL_free(ids);
+    return found;
 }
 
 bool IsToggleKey(const SDL_Event& event, SDL_Scancode code) {
@@ -3048,7 +3155,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
                 g_exitPromptOpen = false;
             } else if (g_topBarVisible) {
                 SetTopBarVisible(false);
-            } else {
+            } else if (!ValveControllerConnected()) {
                 g_exitPromptOpen = true;
             }
             ApplyInputBlockState();

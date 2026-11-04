@@ -25,11 +25,12 @@ constexpr uint32_t kHold = 0x00, kTrig = 0x04, kRelease = 0x08, kAcc = 0x0C, kAc
                    kDevType = 0x5C, kWpadErr = 0x5D, kDpdValidFg = 0x5E, kDataFormat = 0x5F, kFsStick = 0x60,
                    kFsAcc = 0x68, kFsAccValue = 0x74, kFsAccSpeed = 0x78;
 
-// KPAD's per-channel work area (PAL RMCP01): KPADInitEx sets the pointer
+// KPAD's per-channel work area (named by its PAL address): KPADInitEx sets the pointer
 // switch to 1 for every channel, and KPADEnableDpd / KPADDisableDpd, which the
 // game inlines into Input::WiiController::TogglePointer, flip it. The SDK
 // reports no pointer while it is off.
-constexpr uint32_t kKpadWorkBase = 0x803457E0, kKpadWorkSize = 0x538, kKpadDpdEnabled = 0x520;
+const uint32_t kKpadWorkBase = MKW_GADDR(803457E0);
+constexpr uint32_t kKpadWorkSize = 0x538, kKpadDpdEnabled = 0x520;
 // dpd_valid_fg for a pointer computed from both sensor-bar dots.
 constexpr uint8_t kDpdValidTwoDots = 2;
 // KPADStatus.ex_status.cl (KPADEXStatus, Classic Controller view).

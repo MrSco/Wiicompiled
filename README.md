@@ -148,14 +148,16 @@ as wheels and marked "(wheel)" in the device list. This has not been tried on a 
 - CPU: Intel Core i5-8400 / AMD Ryzen 5 2600 (4c/6c, ~3.5GHz+) or higher
 - About 20 GB of free disk space during installation (Final game size ~5 GB)
 - This fork's packaged release supports Windows x64. Other platforms are not release targets.
-- A clean, unmodified **PAL `RMCP01`** disc image of Mario Kart Wii, dumped by you. ISO, GCM,
-  GCZ, CISO, WBFS, WIA and RVZ are accepted.
+- A clean, unmodified **PAL `RMCP01`**, **NTSC-U `RMCE01`**, or **NTSC-J `RMCJ01`** disc image of
+  Mario Kart Wii, dumped by you. ISO, GCM, GCZ, CISO, WBFS, WIA and RVZ are accepted.
 
 > [!NOTE]
 > GPU/CPU minimums are set by driver support and D3D12/Vulkan feature requirements, not by the game's actual demands.
 
-Only the clean PAL revision will work. Anything else (other
-regions, patched executables) is rejected outright.
+Only those clean retail revisions will work. Anything else (patched executables, other revisions)
+is rejected outright. The VR features are developed and tested on PAL `RMCP01`; NTSC builds take
+upstream's region support and fall back to the flat virtual screen in races (no immersive race,
+first-person camera or cockpit), as their manifests carry no VR race instrumentation yet.
 
 > [!NOTE]
 > Nobody here will tell you where to get the game. Dumping your own disc is on you, and links to

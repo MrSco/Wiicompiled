@@ -51,6 +51,45 @@ int main() {
         const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "invalid.toml");
         if (!Require(!config.metalFxSpatialUpscaling, "invalid MetalFX setting was accepted")) return 1;
     }
+    {
+        std::istringstream input("[video]\nwidescreen = false\nforce_16_9 = true\n");
+        const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "legacy.toml");
+        if (!Require(config.forceAspect == std::optional<bool>{true} &&
+                         config.widescreen == std::optional<bool>{true} && config.legacyForceAspect,
+                     "legacy force_16_9 did not force a 16:9 game")) return 1;
+    }
+    {
+        std::istringstream input("[video]\nwidescreen = false\nforce_aspect = true\nforce_16_9 = true\n");
+        const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "migrated.toml");
+        if (!Require(config.forceAspect == std::optional<bool>{true} &&
+                         config.widescreen == std::optional<bool>{false} && !config.legacyForceAspect,
+                     "legacy force_16_9 overrode force_aspect")) return 1;
+    }
+    {
+        std::istringstream input("[controller]\nmotion_trick = true\nmotion_trick_sensitivity = 5\n");
+        const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "motion.toml");
+        if (!Require(config.motionTrick == std::optional<bool>{true} &&
+                         config.motionTrickSensitivity == std::optional<int32_t>{5},
+                     "shake to trick settings were not loaded")) return 1;
+    }
+    {
+        std::istringstream input("[controller]\nmotion_trick_sensitivity = 9\n");
+        const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "motion-range.toml");
+        if (!Require(!config.motionTrick && !config.motionTrickSensitivity,
+                     "out of range shake to trick sensitivity was accepted")) return 1;
+    }
+    {
+        std::istringstream input("[controller]\nsteam_input_override = false\nsteam_input_app_id = 1234\n");
+        const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "steam.toml");
+        if (!Require(config.steamInputOverride == std::optional<bool>{false} &&
+                         config.steamInputAppId == std::optional<uint32_t>{1234},
+                     "Steam Input settings were not loaded")) return 1;
+    }
+    {
+        std::istringstream input("[controller]\nsteam_input_app_id = 0\n");
+        const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "steam-zero.toml");
+        if (!Require(!config.steamInputAppId, "zero Steam Input app id was accepted")) return 1;
+    }
     if (!SetsFps("[video]\nshow_fps = false\n", "bare key was not replaced")) return 1;
     if (!SetsFps("[video]\n\"show_fps\" = false\n", "basic-quoted key was not replaced")) return 1;
     if (!SetsFps("[video]\n'show_fps'=false\n", "literal-quoted key was not replaced")) return 1;

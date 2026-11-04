@@ -1,5 +1,6 @@
 #include "memory.h"
 #include "hle/audio/ax_dsp.h"
+#include "gx_thread.h"
 #include "hle_stubs.h"
 #include "ppc_runtime.h"
 #include "runtime_log.h"
@@ -122,8 +123,9 @@ extern "C" uint32_t OSResetSystem()
 {
     RT_LOGF(RT_TAG_OS, "OSResetSystem: simulating console reset\n");
     std::fflush(stderr);
-    // The AX mix worker holds resolved host pointers into the guest regions;
-    // it must be stopped before those mappings are torn down.
+    // The GX thread and the AX mix worker hold resolved host pointers into the
+    // guest regions; they must be stopped before those mappings are torn down.
+    GxThread::Stop();
     AxDspHle::ShutdownMixWorker();
     Memory::Reset();
     SetRuntimeExitCode(0);
@@ -145,6 +147,7 @@ extern "C" uint32_t Exit_801AE58C(int status)
         ShowRuntimeFatalPopup("the game exited with an error status", details);
         MarkFatalErrorReported();
     }
+    GxThread::Stop();
     SetRuntimeExitCode(status);
     std::exit(status);
     return static_cast<uint32_t>(status);

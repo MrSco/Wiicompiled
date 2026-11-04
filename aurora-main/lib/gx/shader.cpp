@@ -744,8 +744,8 @@ static std::string native_input_type(GXAttr attr, const AttrConfig& mapping) {
 static std::string native_attr_load(GXAttr attr, const AttrConfig& mapping) {
   std::string value = fmt::format("native_attr{}", static_cast<u32>(attr));
   if (attr < GX_VA_POS) {
-    // The matrix index byte, fetched with its whole word.
-    value = fmt::format("(({} >> {}u) & 255u)", value, (mapping.offset % 4) * 8);
+    // The matrix index byte, fetched with its whole word. GX matrix indices are six bits.
+    value = fmt::format("(({} >> {}u) & 63u)", value, (mapping.offset % 4) * 8);
     return attr == GX_VA_PNMTXIDX ? fmt::format("({} / 3u)", value) : value;
   }
   if (attr == GX_VA_CLR0 || attr == GX_VA_CLR1) {
@@ -790,7 +790,8 @@ auto attr_load(const ShaderConfig& config, GXAttr attr, std::string_view vidx) -
   }
   switch (attr) {
   case GX_VA_PNMTXIDX:
-    return fmt::format("(raw_fetch_u8_1(&{}, {}) / 3u)", buf, offs);
+    // GX matrix indices are six bits; the hardware ignores the top two.
+    return fmt::format("((raw_fetch_u8_1(&{}, {}) & 0x3fu) / 3u)", buf, offs);
   case GX_VA_TEX0MTXIDX:
   case GX_VA_TEX1MTXIDX:
   case GX_VA_TEX2MTXIDX:
@@ -799,7 +800,7 @@ auto attr_load(const ShaderConfig& config, GXAttr attr, std::string_view vidx) -
   case GX_VA_TEX5MTXIDX:
   case GX_VA_TEX6MTXIDX:
   case GX_VA_TEX7MTXIDX:
-    return fmt::format("raw_fetch_u8_1(&{}, {})", buf, offs);
+    return fmt::format("(raw_fetch_u8_1(&{}, {}) & 0x3fu)", buf, offs);
   case GX_VA_POS: {
     const auto posLoad = fetch_attr(mapping, buf, offs, le);
     if (mapping.cnt == 2) {

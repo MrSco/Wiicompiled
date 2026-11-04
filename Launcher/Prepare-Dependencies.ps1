@@ -24,6 +24,9 @@ $auroraDawn = Join-Path $repoRoot 'aurora-main\cmake\AuroraDawnProvider.cmake'
 $auroraLibUsb = Join-Path $repoRoot 'aurora-main\cmake\AuroraLibUSB.cmake'
 $auroraSdl = Join-Path $repoRoot 'aurora-main\cmake\AuroraSDL3Provider.cmake'
 $runtimeCMake = Join-Path $repoRoot 'runtime\CMakeLists.txt'
+if (-not (Test-Path -LiteralPath $auroraCMake -PathType Leaf)) {
+    throw 'Aurora sources are missing: this fork vendors them in aurora-main\. Restore that directory first.'
+}
 
 # Name = directory under the destination; FetchContent maps it back through
 # FETCHCONTENT_SOURCE_DIR_<UPPERCASE NAME> (NativeBuildFlags.ps1), so the names are the declared
@@ -31,33 +34,39 @@ $runtimeCMake = Join-Path $repoRoot 'runtime\CMakeLists.txt'
 $packages = @(
     [pscustomobject]@{
         Name = 'vulkan_headers'; File = 'vulkan-headers-015e25c3c91b70eb1a754d36fb14c4ba6ad9b0b9.tar.gz'
+        Sha256 = '666700236101d288dea8bb080c6f8039467cb1d29ea1e1aae6f93a819f4f9029'
         Uris = @('https://github.com/KhronosGroup/Vulkan-Headers/archive/015e25c3c91b70eb1a754d36fb14c4ba6ad9b0b9.tar.gz')
         Pins = @(@{ File = $runtimeCMake; Text = 'Vulkan-Headers/archive/015e25c3c91b70eb1a754d36fb14c4ba6ad9b0b9.tar.gz' })
     },
     [pscustomobject]@{
         Name = 'SDL'; File = 'SDL3-3.4.4.tar.gz'
+        Sha256 = 'ee712dbe6a89bb140bbfc2ce72358fb5ee5cc2240abeabd54855012db30b3864'
         Uris = @('https://github.com/libsdl-org/SDL/releases/download/release-3.4.4/SDL3-3.4.4.tar.gz')
         Pins = @(@{ File = $auroraCMake; Text = 'set(AURORA_SDL3_VERSION "3.4.4"' },
                  @{ File = $auroraSdl; Text = 'releases/download/release-${AURORA_SDL3_VERSION}/SDL3-${AURORA_SDL3_VERSION}.tar.gz' })
     },
     [pscustomobject]@{
         Name = 'abseil-cpp'; File = 'abseil-cpp-20240722.0.tar.gz'
+        Sha256 = 'f50e5ac311a81382da7fa75b97310e4b9006474f9560ac46f54a9967f07d4ae3'
         Uris = @('https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.tar.gz')
         Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.tar.gz' })
     },
     [pscustomobject]@{
         Name = 'dawn_prebuilt'; File = 'dawn-v20260603.191052-windows-amd64.tar.gz'
+        Sha256 = '13be9cff8b9b179c42dcd16aeabb6effcc8f0dfdcc14463eda2a5caeda225142'
         Uris = @('https://github.com/theofficialgman/dawn-build/releases/download/v20260603.191052/dawn-windows-amd64.tar.gz')
         Pins = @(@{ File = $auroraCMake; Text = 'set(AURORA_DAWN_VERSION "v20260603.191052"' },
                  @{ File = $auroraDawn; Text = 'SHA256=13be9cff8b9b179c42dcd16aeabb6effcc8f0dfdcc14463eda2a5caeda225142' })
     },
     [pscustomobject]@{
         Name = 'fmt'; File = 'fmt-11.1.4.tar.gz'
+        Sha256 = 'ac366b7b4c2e9f0dde63a59b3feb5ee59b67974b14ee5dc9ea8ad78aa2c1ee1e'
         Uris = @('https://github.com/fmtlib/fmt/archive/refs/tags/11.1.4.tar.gz')
         Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/fmtlib/fmt/archive/refs/tags/11.1.4.tar.gz' })
     },
     [pscustomobject]@{
         Name = 'freetype'; File = 'freetype-2.14.3.tar.gz'
+        Sha256 = 'e61b31ab26358b946e767ed7eb7f4bb2e507da1cfefeb7a8861ace7fd5c899a1'
         Uris = @('https://files.twilitrealm.dev/freetype-2.14.3.tar.gz',
                  'https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.gz',
                  'https://downloads.sourceforge.net/project/freetype/freetype2/2.14.3/freetype-2.14.3.tar.gz')
@@ -65,48 +74,57 @@ $packages = @(
     },
     [pscustomobject]@{
         Name = 'imgui'; File = 'imgui-1.91.9b-docking.tar.gz'
+        Sha256 = '466fdef9b18de15f0bb6e288e3d00ffa3d82200ec458ce5e4f724a161d9528a5'
         Uris = @('https://github.com/ocornut/imgui/archive/refs/tags/v1.91.9b-docking.tar.gz')
         Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/ocornut/imgui/archive/refs/tags/v1.91.9b-docking.tar.gz' })
     },
     [pscustomobject]@{
         Name = 'libusb'; File = 'libusb-1.0.30.tar.bz2'
+        Sha256 = 'fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf'
         Uris = @('https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2')
         Pins = @(@{ File = $auroraCMake; Text = 'set(AURORA_LIBUSB_VERSION "1.0.30"' },
                  @{ File = $auroraLibUsb; Text = 'releases/download/v${AURORA_LIBUSB_VERSION}/libusb-${AURORA_LIBUSB_VERSION}.tar.bz2' })
     },
     [pscustomobject]@{
         Name = 'openxr'; File = 'OpenXR-SDK-release-1.1.61.tar.gz'
+        Sha256 = 'd5e2773d282642e6e250bd10266f316fc3ff3b8602c83db009a1f434205998e6'
         Uris = @('https://github.com/KhronosGroup/OpenXR-SDK/archive/refs/tags/release-1.1.61.tar.gz')
         Pins = @(@{ File = $runtimeCMake; Text = 'OpenXR-SDK/archive/refs/tags/release-1.1.61.tar.gz' },
                  @{ File = $runtimeCMake; Text = 'SHA256=d5e2773d282642e6e250bd10266f316fc3ff3b8602c83db009a1f434205998e6' })
     },
     [pscustomobject]@{
         Name = 'png'; File = 'libpng-1.6.58.tar.gz'
+        Sha256 = 'a9d4df463d36a6e5f9c29bd6f4967312d17e996c1854f3511f833924eb1993cf'
         Uris = @('https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.58.tar.gz')
         Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.58.tar.gz' })
     },
     [pscustomobject]@{
         Name = 'sqlite3'; File = 'sqlite-amalgamation-3510300.zip'
+        Sha256 = 'acb1e6f5d832484bf6d32b681e858c38add8b2acdfd42ac5df24b8afb46552b4'
         Uris = @('https://sqlite.org/2026/sqlite-amalgamation-3510300.zip')
         Pins = @(@{ File = $auroraExtern; Text = 'https://sqlite.org/2026/sqlite-amalgamation-3510300.zip' })
     },
     [pscustomobject]@{
         Name = 'tracy'; File = 'tracy-a64b9a20294d59421a2f57aeca3c6383d8c48169.tar.gz'
+        Sha256 = '24d342b5127d7f659dc3cf94f24347b348cc736f25b17a691fd7f69541937658'
         Uris = @('https://github.com/wolfpld/tracy/archive/a64b9a20294d59421a2f57aeca3c6383d8c48169.tar.gz')
         Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/wolfpld/tracy/archive/a64b9a20294d59421a2f57aeca3c6383d8c48169.tar.gz' })
     },
     [pscustomobject]@{
         Name = 'xxhash'; File = 'xxHash-0.8.4.tar.gz'
+        Sha256 = '5738270935e7c3d38a79b3adf7c9692566ce7895a25f67de43ad52ab504acd32'
         Uris = @('https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.4.tar.gz')
         Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.4.tar.gz' })
     },
     [pscustomobject]@{
         Name = 'zlib'; File = 'zlib-1.3.2.tar.gz'
+        Sha256 = 'bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16'
         Uris = @('https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz')
         Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz' })
     },
     [pscustomobject]@{
         Name = 'zstd'; File = 'zstd-1.5.7.tar.gz'
+        Sha256 = 'eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3'
         Uris = @('https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz')
         Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz' })
     }
@@ -115,6 +133,7 @@ $packages = @(
 # The C++/WinRT compiler (NuGet package = zip) that generates the projection headers.
 $cppWinRtTool = [pscustomobject]@{
     Name = 'cppwinrt-tool'; File = 'Microsoft.Windows.CppWinRT.3.0.260818.1.nupkg'
+    Sha256 = 'a8993608ae9263a8288e1a1d9ee2684a5632f4acc59e1e89ddd86b3b889a7367'
     Uris = @('https://www.nuget.org/api/v2/package/Microsoft.Windows.CppWinRT/3.0.260818.1')
     Pins = @()
 }
@@ -137,11 +156,20 @@ function Assert-Pinned($Package) {
     }
 }
 
+function Get-Sha256([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+
+# Every archive this returns, cached or downloaded, matches its pinned Sha256.
 function Get-Archive($Package) {
     $archive = Join-Path $downloads $Package.File
-    if (Test-Path -LiteralPath $archive -PathType Leaf) { return $archive }
+    if (Test-Path -LiteralPath $archive -PathType Leaf) {
+        $actual = Get-Sha256 $archive
+        if ($actual -eq $Package.Sha256) { return $archive }
+        Write-Warning "$($Package.Name): cached $archive has SHA-256 $actual, expected $($Package.Sha256); discarding it and downloading again."
+        Remove-Item -LiteralPath $archive -Force
+    }
     $temporary = $archive + '.partial'
     $failures = @()
+    $mismatch = $false
     foreach ($uri in $Package.Uris) {
         Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
         Write-Host "Downloading $($Package.Name) from $uri..."
@@ -151,11 +179,21 @@ function Get-Archive($Package) {
             $failures += "$uri ($($_.Exception.Message))"
             continue
         }
+        $actual = Get-Sha256 $temporary
+        if ($actual -ne $Package.Sha256) {
+            $failures += "$uri (SHA-256 $actual, expected $($Package.Sha256))"
+            $mismatch = $true
+            continue
+        }
         Move-Item -LiteralPath $temporary -Destination $archive -Force
         return $archive
     }
     Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
-    throw "$($Package.Name) could not be fetched: $($failures -join '; ')"
+    $hint = ''
+    if ($mismatch) {
+        $hint = ' If upstream republished this archive, check the new file against an upstream-published checksum before updating its Sha256 in Prepare-Dependencies.ps1.'
+    }
+    throw "$($Package.Name) could not be fetched: $($failures -join '; ').$hint"
 }
 
 function Expand-Package([string]$Archive, [string]$Target) {
@@ -179,6 +217,22 @@ function Expand-Package([string]$Archive, [string]$Target) {
     if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
 }
 
+# Records which archive a tree came from, so a pin change replaces a stale tree.
+function Get-Stamp($Package) { "$($Package.File) $($Package.Sha256)" }
+
+function Test-Stamp([string]$Target, [string]$Text) {
+    $stamp = $Target + '.source'
+    (Test-Path -LiteralPath $stamp -PathType Leaf) -and ([IO.File]::ReadAllText($stamp) -eq $Text)
+}
+
+function Install-Package($Package, [string]$Target, [string]$RequiredFile) {
+    $ready = if ($RequiredFile) { Test-Path -LiteralPath $RequiredFile -PathType Leaf } else { Test-Path -LiteralPath $Target -PathType Container }
+    if ($ready -and (Test-Stamp $Target (Get-Stamp $Package))) { return }
+    Expand-Package (Get-Archive $Package) $Target
+    [IO.File]::WriteAllText($Target + '.source', (Get-Stamp $Package))
+    Write-Host "Prepared $($Package.Name)"
+}
+
 foreach ($package in $packages) {
     Assert-Pinned $package
     $target = Join-Path $Destination $package.Name
@@ -198,18 +252,16 @@ foreach ($package in $packages) {
         Write-Host 'Prepared custom Dawn with Windows Vulkan OpenXR support'
         continue
     }
-    if (Test-Path -LiteralPath $target -PathType Container) { continue }
-    Expand-Package (Get-Archive $package) $target
-    Write-Host "Prepared $($package.Name)"
+    Install-Package $package $target
 }
 
 $cppWinRt = Join-Path $Destination 'cppwinrt'
-if (-not (Test-Path -LiteralPath (Join-Path $cppWinRt 'winrt\base.h') -PathType Leaf)) {
+$cppWinRtCurrent = (Test-Path -LiteralPath (Join-Path $cppWinRt 'winrt\base.h') -PathType Leaf) -and
+    (Test-Stamp $cppWinRt (Get-Stamp $cppWinRtTool))
+if (-not $cppWinRtCurrent) {
     $toolRoot = Join-Path $PSScriptRoot 'artifacts\cppwinrt-tool'
     $compiler = Join-Path $toolRoot 'bin\cppwinrt.exe'
-    if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
-        Expand-Package (Get-Archive $cppWinRtTool) $toolRoot
-    }
+    Install-Package $cppWinRtTool $toolRoot $compiler
     if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw "cppwinrt.exe is missing: $compiler" }
     if (Test-Path -LiteralPath $cppWinRt) { Remove-Item -LiteralPath $cppWinRt -Recurse -Force }
     [IO.Directory]::CreateDirectory($cppWinRt) | Out-Null
@@ -220,6 +272,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $cppWinRt 'winrt\base.h') -PathType 
         throw "cppwinrt.exe produced no winrt\base.h under $cppWinRt"
     }
     Copy-Item -LiteralPath (Join-Path $toolRoot 'LICENSE') -Destination (Join-Path $cppWinRt 'LICENSE.txt')
+    [IO.File]::WriteAllText($cppWinRt + '.source', (Get-Stamp $cppWinRtTool))
     Write-Host 'Prepared cppwinrt'
 }
 

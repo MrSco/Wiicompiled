@@ -122,7 +122,7 @@ void RunSkinning(const CpuContext* context, uint32_t scn, uint32_t palette, uint
     call_context.gpr[5] = scn + kScnMdlResMdlOffset;
     call_context.gpr[6] = byte_code;
     CpuContextScope scope(&call_context);
-    func_80067F70(&call_context);
+    MKW_GUEST_FUNC(80067F70)(&call_context);
 }
 
 // World matrices in a model's palette, or zero.
@@ -688,6 +688,6 @@ extern "C" void CharacterBodyCalcView(CpuContext* context) {
                                << ((active & 2u) != 0 ? "tracked" : "seated") << std::endl;
     }
     g_character_hands.store(active, std::memory_order_release);
-    func_8006FA50(context);
+    MKW_GUEST_FUNC(8006FA50)(context);
     // `saved` puts the original palettes back here, even if CalcView throws.
 }

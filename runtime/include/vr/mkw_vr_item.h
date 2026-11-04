@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "guest_abi/guest_region.h"
+
 #include <cstdint>
 
 namespace mkw::vr {
@@ -39,7 +41,7 @@ HeldItem ReadHeldItem(uint32_t local_racer, uint64_t race_generation) noexcept {
     result.race_generation = race_generation;
     if (local_racer >= 12) return result;
     uint32_t manager = 0, players = 0;
-    if (!GuestMemory::TryRead32(0x809C3618u, manager) || !manager ||
+    if (!GuestMemory::TryRead32(MKW_GADDR(809C3618), manager) || !manager ||
         !GuestMemory::TryRead32(manager + 0x14u, players) || !players) return result;
     const uint32_t player = players + local_racer * 0x248u;
     if (player < players || !GuestMemory::Contains(player, 0xCCu)) return result;

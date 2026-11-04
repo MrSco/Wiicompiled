@@ -7,6 +7,9 @@
 #include <stdexcept>
 #include <unordered_map>
 
+// The walks name guest addresses by PAL identity (MKW_GADDR); these tests run as PAL RMCP01.
+extern "C" const uint8_t kMkwGuestRegion = 0;
+
 namespace {
 
 int g_failures = 0;

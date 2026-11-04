@@ -245,8 +245,11 @@ typedef struct {
   AuroraBackend desiredBackend;
   uint32_t msaa;
   uint16_t maxTextureAnisotropy;
-  // No vsync knob exists: the swapchain is always configured for a
-  // non-blocking present mode (Immediate, else Mailbox). See best_present_mode.
+  // Desktop window only: present with Fifo, at most once per display refresh, dropping surplus
+  // frames instead of blocking the producer. Off keeps the non-blocking mode (Immediate, else
+  // Mailbox; see best_present_mode). Never applies while a stereo frame provider (an OpenXR
+  // session) is registered: the headset paces itself and its eyes share the queue with the mirror.
+  bool vsync;
   bool startFullscreen;
   bool allowJoystickBackgroundEvents;
   bool pauseOnFocusLost;
@@ -297,6 +300,9 @@ typedef struct {
   bool hasD3D12AdapterLuid;
   uint32_t d3d12AdapterLuidLow;
   int32_t d3d12AdapterLuidHigh;
+
+  // Keeps the window hidden for the whole run without pausing rendering.
+  bool startHidden;
 } AuroraConfig;
 
 typedef enum {
@@ -431,6 +437,9 @@ void aurora_set_pause_on_focus_lost(bool value);
 void aurora_set_background_input(bool value);
 void aurora_set_display_mode(AuroraDisplayMode mode);
 AuroraDisplayMode aurora_get_display_mode();
+// See AuroraConfig.vsync. Takes effect at the next frame boundary.
+void aurora_enable_vsync(bool enabled);
+SDL_Window* aurora_get_window();
 
 typedef enum {
   AURORA_METALFX_DISABLED,

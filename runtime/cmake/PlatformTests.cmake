@@ -63,6 +63,25 @@ target_include_directories(mkw_input_expr_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}
 target_compile_features(mkw_input_expr_tests PRIVATE cxx_std_17)
 add_test(NAME mkw_input_expr_tests COMMAND mkw_input_expr_tests)
 
+add_executable(mkw_motion_trick_tests
+    "${MKW_TEST_RUNTIME_DIR}/tests/motion_trick_tests.cpp"
+    "${MKW_TEST_RUNTIME_DIR}/src/motion_trick_detector.cpp")
+target_include_directories(mkw_motion_trick_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
+target_compile_features(mkw_motion_trick_tests PRIVATE cxx_std_17)
+# Match the runtime's float model so the bad-data guard is tested as shipped.
+target_compile_options(mkw_motion_trick_tests PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-ffast-math>)
+add_test(NAME mkw_motion_trick_tests COMMAND mkw_motion_trick_tests)
+
+# The emulated Bluetooth controller is pure host code.
+add_executable(mkw_bluetooth_controller_tests
+    "${MKW_TEST_RUNTIME_DIR}/tests/bluetooth_controller_tests.cpp"
+    "${MKW_TEST_RUNTIME_DIR}/src/hle/bluetooth/bt_controller.cpp"
+    "${MKW_TEST_RUNTIME_DIR}/src/hle/bluetooth/bt_remote_link.cpp"
+    "${MKW_TEST_RUNTIME_DIR}/src/hle/bluetooth/bt_sdp.cpp")
+target_include_directories(mkw_bluetooth_controller_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
+target_compile_features(mkw_bluetooth_controller_tests PRIVATE cxx_std_20)
+add_test(NAME mkw_bluetooth_controller_tests COMMAND mkw_bluetooth_controller_tests)
+
 # HostContext deliberately keeps the platform-specific context primitive out
 # of fiber_manager.cpp. Exercise the Linux libco handoff directly so future
 # refactors cannot silently remove its headers, implementation, or link edge.

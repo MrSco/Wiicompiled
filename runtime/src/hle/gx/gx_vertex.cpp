@@ -162,7 +162,7 @@ extern "C" void GX__SetVtxAttrFmtv_8016de08(uint32_t vf, uint32_t la) {
     while(true){
         uint32_t a=Memory::Read32(p);
         if(a==0xFFu) break;
-        GX__SetVtxAttrFmt_8016dc68(vf, a, Memory::Read32(p+4), Memory::Read32(p+8), Memory::Read32(p+12)&0xFFu);
+        GX__SetVtxAttrFmt_8016dc68(vf, a, Memory::Read32(p+4), Memory::Read32(p+8), Memory::Read8(p+12));
         p+=16;
     }
 }
@@ -320,7 +320,7 @@ void ServiceDeferredTimingDuringGxWork() {
 void GX__Begin_gx(uint32_t t, uint32_t vf, uint32_t nv) {
     ApplyAuroraVtxStateForBegin(static_cast<GXVtxFmt>(vf));
     g_hleGxState.currentVtxFmt=(GXVtxFmt)vf; g_hleGxState.currentPrim=(GXPrimitive)t;
-    g_hleGxState.vertsRemaining=nv; g_hleGxState.inBegin=true; g_hleGxState.auroraBeginCalled=false;
+    g_hleGxState.vertsRemaining=nv; g_hleGxState.inBegin=nv!=0; g_hleGxState.auroraBeginCalled=false;
     g_hleGxState.fifoReadOffset = 0;
     g_hleGxState.fifoByteCount=0; g_hleGxState.ResetVertex();
 }

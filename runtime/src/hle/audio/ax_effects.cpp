@@ -3,6 +3,7 @@
 #include "hle_stubs.h"
 #include "memory.h"
 #include "ppc_runtime.h"
+#include "guest_function_imports.h"
 #include "runtime_log.h"
 
 #include <cmath>
@@ -13,9 +14,6 @@
 #include <utility>
 #include <vector>
 
-
-extern "C" void func_8012B830(CpuContext* ctx);
-extern "C" void func_801284B4(CpuContext* ctx);
 
 #if defined(__clang__)
 // PowerPC uses discrete fmuls/fadds; a fused multiply-add would change sample rounding.
@@ -80,8 +78,8 @@ constexpr uint32_t kSamplesPerFrame = 96;
 constexpr uint32_t kChannels = 3;
 
 // .sdata2 constants the guest function loads through r2.
-constexpr uint32_t kOneConstantAddr = 0x80388588u;   // 1.0f
-constexpr uint32_t kScaleConstantAddr = 0x8038858Cu; // 0.6f send pre-scale
+const uint32_t kOneConstantAddr = MKW_GADDR(80388588);   // 1.0f
+const uint32_t kScaleConstantAddr = MKW_GADDR(8038858C); // 0.6f send pre-scale
 
 // AXFX_REVERBSTD_EXP field offsets (byte offsets into the struct in r4).
 constexpr uint32_t kFieldPreDelayCoef = 0x18;
@@ -347,10 +345,10 @@ constexpr uint32_t kCombs = 3;
 constexpr uint32_t kAllpasses = 2;
 
 // .sdata2 constants the guest function loads through r2 (_SDA2_BASE_ = 0x8038EFA0).
-constexpr uint32_t kZeroConstantAddr = 0x803884D4u; // 0.0f, the comb accumulator seed
-constexpr uint32_t kOneConstantAddr = 0x803884D8u;  // 1.0f
-constexpr uint32_t kWetConstantAddr = 0x803884DCu;  // 0.6f wet pre-scale
-constexpr uint32_t kMixConstantAddr = 0x803884E0u;  // 0.5f channel cross-mix
+const uint32_t kZeroConstantAddr = MKW_GADDR(803884D4); // 0.0f, the comb accumulator seed
+const uint32_t kOneConstantAddr = MKW_GADDR(803884D8);  // 1.0f
+const uint32_t kWetConstantAddr = MKW_GADDR(803884DC);  // 0.6f wet pre-scale
+const uint32_t kMixConstantAddr = MKW_GADDR(803884E0);  // 0.5f channel cross-mix
 
 // AXFX_REVERBHI_EXP field offsets (byte offsets into the struct in r4). Every one
 // is read off the translated body at 0x801284B4 rather than guessed: the arrays
@@ -784,7 +782,7 @@ void RenderVerified(CpuContext* ctx, uint32_t stateAddr, Frame& frame) {
     }
 
     const CpuContext savedContext = *ctx;
-    func_801284B4(ctx);
+    MKW_GUEST_FUNC(801284B4)(ctx);
     *ctx = savedContext;
 
     std::vector<std::vector<uint8_t>> expected(regions.size());
@@ -831,7 +829,7 @@ extern "C" void AXFXReverbStdExpCallback_8012b830(CpuContext* ctx) {
     try {
         flags = Memory::Read32(stateAddr + ReverbStd::kFieldFlags);
     } catch (const Memory::AccessViolation&) {
-        func_8012B830(ctx);
+        MKW_GUEST_FUNC(8012B830)(ctx);
         return;
     }
     if (flags != 0) {
@@ -849,7 +847,7 @@ extern "C" void AXFXReverbStdExpCallback_8012b830(CpuContext* ctx) {
         built = false;
     }
     if (!built) {
-        func_8012B830(ctx);
+        MKW_GUEST_FUNC(8012B830)(ctx);
         return;
     }
 
@@ -871,7 +869,7 @@ extern "C" void AXFXReverbHiExpCallback_801284b4(CpuContext* ctx) {
     try {
         flags = Memory::Read32(stateAddr + ReverbHi::kFieldFlags);
     } catch (const Memory::AccessViolation&) {
-        func_801284B4(ctx);
+        MKW_GUEST_FUNC(801284B4)(ctx);
         return;
     }
     if (flags != 0) {
@@ -889,7 +887,7 @@ extern "C" void AXFXReverbHiExpCallback_801284b4(CpuContext* ctx) {
         built = false;
     }
     if (!built) {
-        func_801284B4(ctx);
+        MKW_GUEST_FUNC(801284B4)(ctx);
         return;
     }
 

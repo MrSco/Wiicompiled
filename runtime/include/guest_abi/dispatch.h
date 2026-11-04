@@ -2,6 +2,7 @@
 
 #include "guest_abi/cpu_context.h"
 #include "guest_abi/exec_guard.h"
+#include "guest_abi/guest_region.h"
 #include "isa/ppc_isa_config.h"
 #include "isa/ppc_isa_cr.h"
 
@@ -24,7 +25,7 @@ uint32_t FilterScnRendererPathMaskOption(uint32_t pathMask) noexcept;
 // (used for the path mask filtering in ScnRenderer::createPath: depth of
 // field is always removed, bloom when the user disabled it)
 inline void ApplyRuntimeCallOptions(uint32_t target, CpuContext* ctx) {
-    if (target == 0x8023BD38u) {
+    if (::GuestRegion::Is<0x8023BD38u>(target)) {
         // ScnRenderer::createPath receives the post-processing path mask in r4.
         ctx->gpr[4] = FilterScnRendererPathMaskOption(ctx->gpr[4]);
     }
@@ -242,13 +243,11 @@ private:
     std::array<uint32_t, 18> saved_;
 };
 
-// Guest address of OSLoadContext, which models rfi-style context restoration
-// and intentionally replaces the full guest register file instead of returning
-// like a normal ABI call. It can never be guarded.
-inline constexpr uint32_t kOSLoadContextAddress = 0x801A1F58u;
-
+// OSLoadContext models rfi-style context restoration and intentionally replaces
+// the full guest register file instead of returning like a normal ABI call. It
+// can never be guarded.
 inline bool ShouldPreserveNonvolatileGprsForRawCpuCall(const TranslatedFunctionInfo* info) noexcept {
-    return info->kind == FunctionKind::Native && info->address != kOSLoadContextAddress;
+    return info->kind == FunctionKind::Native && info->address != MKW_GADDR(801A1F58);
 }
 
 inline uint32_t NonvolatileFprGuardMaskFor(const TranslatedFunctionInfo* info) noexcept {
@@ -291,6 +290,11 @@ template <uint32_t Target>
 struct KnownTypedNativeCpuCall {
     static constexpr bool kAvailable = false;
 };
+
+template <typename T, typename = void>
+struct IsPureTypedNativeCpuCall : std::false_type {};
+template <typename T>
+struct IsPureTypedNativeCpuCall<T, std::void_t<decltype(T::kPure)>> : std::bool_constant<T::kPure> {};
 
 #include "guest_abi/native_cpu_calls.inc"
 
@@ -558,7 +562,10 @@ inline void InvokeDirectCpu(CpuContext* ctx) {
         return;
     }
 
-    if constexpr (KnownTypedNativeCpuCall<Target>::kAvailable) {
+    if constexpr (IsPureTypedNativeCpuCall<KnownTypedNativeCpuCall<Target>>::value) {
+        KnownTypedNativeCpuCall<Target>::Invoke(cpu);
+        return;
+    } else if constexpr (KnownTypedNativeCpuCall<Target>::kAvailable) {
         PpcNonvolatileGprGuard gprGuard(cpu);
         if (TryGetCpuContext() != cpu) {
             CpuContextScope scope(cpu);
@@ -585,12 +592,20 @@ inline void InvokeDirectCpu(CpuContext* ctx) {
 // Cold tail of InvokeIndirectJump: a bctr target that is not a registered function.
 [[noreturn]] MKW_PPC_NO_INLINE MKW_PPC_COLD void ReportMissingIndirectJumpTarget(uint32_t target, CpuContext* cpu);
 
-// Indirect jump (bctr without link) - used for switch tables.
-inline void InvokeIndirectJump(uint32_t target, CpuContext* ctx) {
-    // Use the caller's context, not the persistent global context!
-    // This is essential for tail calls via bctr where the 'this' pointer (r3)
-    // must be passed correctly to the target function.
-    CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
+// The common indirect case: an unguarded record called from its own CpuContext, so the full
+// TryDispatchRawCpuTarget would only set the execution address and call.
+MKW_PPC_FORCE_INLINE bool TryDispatchUnguardedRawCpuTarget(uint32_t target, CpuContext* cpu) {
+    const RawDispatchRecord* record = TranslatedFunctionRegistry::FindRawByAddressPtr(target);
+    if (record == nullptr || record->entry == nullptr || record->preserveNonvolatileGprs ||
+        record->nonvolatileFprWriteMask != 0 || TryGetCpuContext() != cpu) {
+        return false;
+    }
+    RecompMod::ScopedTranslatedExecutionAddress translatedExecution(record->address);
+    record->entry(cpu);
+    return true;
+}
+
+MKW_PPC_NO_INLINE inline void InvokeIndirectJumpSlow(uint32_t target, CpuContext* cpu) {
     if (TryDispatchRawCpuTarget(TranslatedFunctionRegistry::FindRawByAddressPtr(target), cpu)) {
         return;
     }
@@ -605,12 +620,22 @@ inline void InvokeIndirectJump(uint32_t target, CpuContext* ctx) {
     ReportMissingIndirectJumpTarget(target, cpu);
 }
 
-inline void InvokeIndirectCpu(uint32_t target, CpuContext* ctx) {
+// Indirect jump (bctr without link) - used for switch tables.
+inline void InvokeIndirectJump(uint32_t target, CpuContext* ctx) {
+    // Use the caller's context, not the persistent global context!
+    // This is essential for tail calls via bctr where the 'this' pointer (r3)
+    // must be passed correctly to the target function.
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
+    if (TryDispatchUnguardedRawCpuTarget(target, cpu)) {
+        return;
+    }
+    InvokeIndirectJumpSlow(target, cpu);
+}
+
+MKW_PPC_NO_INLINE inline void InvokeIndirectCpuSlow(uint32_t target, CpuContext* cpu) {
     if (target == 0) {
         ReportMissingCpuTarget(target, cpu);
     }
-    ApplyRuntimeCallOptions(target, cpu);
     if (TryDispatchRawCpuTarget(TranslatedFunctionRegistry::FindRawByAddressPtr(target), cpu)) {
         return;
     }
@@ -618,4 +643,13 @@ inline void InvokeIndirectCpu(uint32_t target, CpuContext* ctx) {
         return;
     }
     ReportMissingCpuTarget(target, cpu);
+}
+
+inline void InvokeIndirectCpu(uint32_t target, CpuContext* ctx) {
+    CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
+    ApplyRuntimeCallOptions(target, cpu);
+    if (TryDispatchUnguardedRawCpuTarget(target, cpu)) {
+        return;
+    }
+    InvokeIndirectCpuSlow(target, cpu);
 }

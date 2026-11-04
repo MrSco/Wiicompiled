@@ -2,6 +2,7 @@
 #include "memory.h"
 #include "hle/controller_status_contract.h"
 #include "input_bindings.h"
+#include "motion_trick.h"
 #include "physical_wheel.h"
 #include "vr/mkw_vr_policy.h"
 #include "vr/openxr_integration.h"
@@ -122,10 +123,6 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     // thread that polls controllers, rather than from the pacing thread itself.
     mkw::vr::OpenXRApplyControllerState();
     uint32_t rumbleMask = PADRead(statuses);
-    // Wii Remotes reach the game through KPAD, not as GameCube pads. This also
-    // applies while input is blocked (overlay open) so the port does not flip
-    // between "connected" and "no controller" every time the overlay toggles.
-    WiiRemoteInput::HideRemotesFromPad(statuses, PAD_CHANMAX);
 
     FillTriggersHeldByButtons(statuses);
     InputBindings::Apply(statuses);
@@ -135,6 +132,8 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
                                 mkw::vr::MkwVRPolicyGetSnapshot().scene.mode == mkw::vr::VRSceneMode::Race)) {
         rumbleMask |= PAD_CHAN0_BIT;
     }
+    // Shake to trick goes last: it reads the merged statuses of every source above.
+    MotionTrick::Apply(statuses);
 
     try {
         for (uint32_t i = 0; i < PAD_CHANMAX; ++i) {

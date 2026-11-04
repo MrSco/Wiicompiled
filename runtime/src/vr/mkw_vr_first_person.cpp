@@ -4,6 +4,7 @@
 
 #include "aurora/aurora.h"
 
+#include "guest_function_imports.h"
 #include "gx_native_wheel.h"
 #include "hle/dvd_vr_asset.h"
 #include "hle_stubs.h"
@@ -30,14 +31,11 @@
 #include <string>
 #include <vector>
 
-extern "C" void func_805A6C58(CpuContext* context);
-extern "C" void func_8056A470(CpuContext* context);
-extern "C" void func_8056A580(CpuContext* context);
-// nw4r::g3d::ScnRoot::CalcView, wrapped by the character body
-// (character_body_ik.inl), and the skinning pass ScnMdlSimple's posture
-// calculation runs (see kScnMdlSkinByteCodeOffset).
-extern "C" void func_8006FA50(CpuContext* context);
-extern "C" void func_80067F70(CpuContext* context);
+// Base translations called directly, through the function registry so the runtime links without
+// the game and names each by its PAL identity (guest_function_imports.h): RaceCamera::GetViewMtx
+// (805A6C58), 8056A470 / 8056A580, nw4r::g3d::ScnRoot::CalcView (8006FA50, wrapped by the
+// character body in character_body_ik.inl) and the skinning pass ScnMdlSimple's posture
+// calculation runs (80067F70, see kScnMdlSkinByteCodeOffset).
 
 namespace mkw::vr {
 namespace {
@@ -60,7 +58,7 @@ constexpr uint32_t kRaceCameraScratchBytes = 0x300u;
 // puts the view somewhere unrelated to the kart while still looking finite.
 // The game's own call site (0x80711198) sources it from *(*(0x809C2898)+0x8BC);
 // reproduce that exactly, and fall back to zero, which means "no offset".
-constexpr uint32_t kRaceCameraBlendOwnerAddress = 0x809C2898u;
+const uint32_t kRaceCameraBlendOwnerAddress = MKW_GADDR(809C2898);
 constexpr uint32_t kRaceCameraBlendOffset = 0x8BCu;
 
 // nw4r::g3d::G3DState::GetCameraMtxPtr (0x80064180) resolves the matrix the
@@ -71,7 +69,7 @@ constexpr uint32_t kRaceCameraBlendOffset = 0x8BCu;
 // not: measured on device, the camera it returns sits ~155 units directly
 // above the kart, with under 5 units of horizontal separation, so a head
 // position derived from it has no chase-camera offset in it at all.
-constexpr uint32_t kG3DCameraMtxStateAddress = 0x802BBAB4u;
+const uint32_t kG3DCameraMtxStateAddress = MKW_GADDR(802BBAB4);
 constexpr uint32_t kG3DCameraMtxBankOffset = 0x2u;
 constexpr uint32_t kG3DCameraMtxOffset = 52u;
 
@@ -168,7 +166,12 @@ constexpr uint32_t kKartBodyRightGripOffset = 0xD8u;
 // matrix at +0x1C, not by the body's.
 constexpr uint32_t kBodyBikeHandleOffset = 0x238u;
 constexpr uint32_t kBikeHandleVtableOffset = 0xCu;
-constexpr uint32_t kBikeHandleVtable = 0x808B5314u;
+// guest_versions.inc knows no NTSC-U counterpart of this vtable (StaticR .data); there it is 0
+// and no handlebar is recognised.
+const uint32_t kBikeHandleVtable = [] {
+    const GuestRegion::Mapping mapping = GuestRegion::Map(0x808B5314u, GuestRegion::Current());
+    return mapping.found ? mapping.address : 0u;
+}();
 constexpr uint32_t kBikeHandleMtxOffset = 0x1Cu;
 // A vehicle part's ModelDirector is at +0x7C and a driver's at
 // DriverController+0x6C (DriverController::LoadModels 0x807C7828 reads it and
@@ -247,7 +250,7 @@ constexpr uint32_t kKartStateTrickAnimating = 1u << 22;
 // System::RaceManager::spInstance (mkw decompilation symbols: StaticR .bss+0x50,
 // next to RaceConfig's at 0x809BD728). RaceManager::stage, the u32 at +0x28:
 // 0 is the course preview (vr_controls.h RaceIntroOver).
-constexpr uint32_t kRaceManagerInstanceAddress = 0x809BD730u;
+const uint32_t kRaceManagerInstanceAddress = MKW_GADDR(809BD730);
 constexpr uint32_t kRaceManagerStageOffset = 0x28u;
 // Frames the stage may stay unreadable before the intro is let go anyway, so a
 // wrong address cannot keep first person away for the whole race.
@@ -335,7 +338,7 @@ bool ReadRaceCameraViewMatrix(const CpuContext* context, uint32_t camera_address
     call_context.fpr[1].d = static_cast<double>(dolly);
     try {
         CpuContextScope scope(&call_context);
-        func_805A6C58(&call_context);
+        MKW_GUEST_FUNC(805A6C58)(&call_context);
         return ReadGuestMtx34(scratch, out);
     } catch (const Memory::AccessViolation&) {
         return false;
@@ -517,7 +520,7 @@ void ApplyModelsVisibilityToModels(uint32_t visibility) noexcept {
     call_context.gpr[3] = visibility;
     try {
         CpuContextScope scope(&call_context);
-        func_8056A470(&call_context);
+        MKW_GUEST_FUNC(8056A470)(&call_context);
     } catch (const Memory::AccessViolation&) {
     }
 }
@@ -538,7 +541,7 @@ bool ApplyModelDraw(uint32_t visibility, uint32_t holder, uint32_t index) noexce
     call_context.gpr[4] = model;
     try {
         CpuContextScope scope(&call_context);
-        func_8056A580(&call_context);
+        MKW_GUEST_FUNC(8056A580)(&call_context);
     } catch (const Memory::AccessViolation&) {
         return false;
     }
@@ -1134,7 +1137,7 @@ void LatchCockpitLocked(uint64_t guest_frame_index) noexcept {
         uint32_t vtable = 0;
         latch.handle_valid =
             Memory::TryRead32(kart.body + kBodyBikeHandleOffset + kBikeHandleVtableOffset, vtable) &&
-            vtable == kBikeHandleVtable &&
+            kBikeHandleVtable != 0 && vtable == kBikeHandleVtable &&
             ReadGuestMtx34(kart.body + kBodyBikeHandleOffset + kBikeHandleMtxOffset, latch.handle_pose);
     }
     // The G3D scene camera is only set once this frame's draws run, so the

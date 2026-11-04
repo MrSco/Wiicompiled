@@ -1422,7 +1422,9 @@ AuroraInfo initialize(int argc, char* argv[], const AuroraConfig& config) noexce
   ASSERT(window::create_renderer(), "Failed to initialize SDL renderer: {}", SDL_GetError());
 #endif
 
-  window::show_window();
+  if (!g_config.startHidden) {
+    window::show_window();
+  }
 
 #ifdef AURORA_ENABLE_GX
   gfx::initialize();
@@ -1563,6 +1565,47 @@ bool headset_owns_display() noexcept {
 #endif
 }
 
+// V-Sync admission, presenter only. Fifo blocks in acquire and Present() once the display's queue
+// is full, and Present() runs under g_queueSubmitMutex, so presenting faster than the display would
+// stall every queue submit (the frame worker's, the eyes'). Admit about one present per refresh
+// period and drop the rest instead. Credit is counted in refresh periods; the cap and the admit
+// threshold absorb frame jitter.
+constexpr double kMaxDisplayCredit = 2.0;
+constexpr double kAdmitDisplayCredit = 0.75;
+double g_displayCredit = kMaxDisplayCredit;
+uint64_t g_displayCreditAtNanos = 0;
+
+uint64_t present_clock_nanos(PresentClock::time_point time) noexcept {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count());
+}
+
+bool admit_display_present(PresentClock::time_point at) noexcept {
+  const uint64_t period = window::refresh_period_nanos();
+  if (period == 0) {
+    return true;
+  }
+  const uint64_t atNanos = present_clock_nanos(at);
+  if (g_displayCreditAtNanos != 0 && atNanos > g_displayCreditAtNanos) {
+    g_displayCredit += static_cast<double>(atNanos - g_displayCreditAtNanos) / static_cast<double>(period);
+  }
+  g_displayCreditAtNanos = std::max(g_displayCreditAtNanos, atNanos);
+  g_displayCredit = std::min(g_displayCredit, kMaxDisplayCredit);
+  if (g_displayCredit < kAdmitDisplayCredit) {
+    return false;
+  }
+  g_displayCredit -= 1.0;
+  return true;
+}
+
+// A present that waited for a vblank means the display queue is full: hold off a full period.
+void report_display_present_wait(std::chrono::nanoseconds wait) noexcept {
+  const uint64_t period = window::refresh_period_nanos();
+  if (period != 0 && static_cast<uint64_t>(wait.count()) > period / 2) {
+    g_displayCredit = std::min(g_displayCredit, kAdmitDisplayCredit - 1.0);
+  }
+}
+
 bool present_presentation_job(const PresentationJob& job) {
   ZoneScoped;
   if (headset_owns_display()) {
@@ -1582,6 +1625,11 @@ bool present_presentation_job(const PresentationJob& job) {
   bool presented = false;
   if (g_surfaceReconfigurePending.load(std::memory_order_acquire) || window::native_resize_pending() ||
       !window::is_presentable()) {
+    return false;
+  }
+  // Read once: a reconfigure only happens while the presenter is idle (begin_frame_impl).
+  const bool blockingPresent = webgpu::blocking_present_mode();
+  if (blockingPresent && !admit_display_present(std::max(job.presentAt, PresentClock::now()))) {
     return false;
   }
   std::chrono::nanoseconds lateBy{};
@@ -1689,6 +1737,9 @@ bool present_presentation_job(const PresentationJob& job) {
         acquired.reset();
       }
     }
+  }
+  if (blockingPresent) {
+    report_display_present_wait(acquireDuration + presentDuration);
   }
   const auto totalDuration =
       std::chrono::duration_cast<std::chrono::nanoseconds>(PresentClock::now() - submissionStarted);
@@ -3186,7 +3237,12 @@ void set_stereo_frame_provider(AuroraStereoFrameProvider provider, void* userdat
       .callback = provider,
       .userdata = userdata,
   };
-  g_stereoProviderActive.store(provider != nullptr, std::memory_order_release);
+  const bool wasActive = g_stereoProviderActive.exchange(provider != nullptr, std::memory_order_acq_rel);
+  // V-Sync never applies while a provider is registered (see best_present_mode): reconfigure the
+  // surface's present mode at the next frame boundary when that changes.
+  if (wasActive != (provider != nullptr) && webgpu::vsync_enabled()) {
+    request_surface_reconfigure();
+  }
 }
 
 void set_stereo_scene_anchor(const float anchorFromScene[12]) noexcept {
@@ -3530,6 +3586,12 @@ void aurora_set_background_input(bool value) {
 }
 void aurora_set_display_mode(AuroraDisplayMode mode) { aurora::window::set_display_mode(mode); }
 AuroraDisplayMode aurora_get_display_mode() { return aurora::window::get_display_mode(); }
+void aurora_enable_vsync(bool enabled) {
+  aurora::webgpu::set_vsync_enabled(enabled);
+  // Applied by the render thread at its next frame boundary, with the presenter idle.
+  aurora::request_surface_reconfigure();
+}
+SDL_Window* aurora_get_window() { return aurora::window::get_sdl_window(); }
 void aurora_set_metalfx_spatial(bool enabled) { aurora::g_metalfxRequested.store(enabled); }
 bool aurora_get_metalfx_spatial() { return aurora::g_metalfxRequested.load(); }
 bool aurora_is_metalfx_spatial_supported() { return aurora::g_metalfxSupported.load(); }

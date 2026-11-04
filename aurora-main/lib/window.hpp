@@ -53,6 +53,8 @@ void set_fullscreen(bool fullscreen);
 bool get_fullscreen();
 void set_display_mode(AuroraDisplayMode mode);
 AuroraDisplayMode get_display_mode();
+// Refresh period of the display showing the window, or 0 when unknown.
+uint64_t refresh_period_nanos() noexcept;
 void set_window_size(uint32_t width, uint32_t height);
 void set_window_position(uint32_t x, uint32_t y);
 void center_window();

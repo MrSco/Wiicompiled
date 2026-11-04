@@ -43,6 +43,28 @@ internal sealed class InstallerEngine
         var toolkit = InstalledLayout.Toolkit(staging);
         var workspace = InstalledLayout.Workspace(staging);
 
+        // The disc decides which release's inputs everything below expects, so it is identified
+        // before any reuse decision or toolkit extraction.
+        _reporter.Progress(InstallStages.Validate, "Checking the Wii disc image...", 1);
+        var nodTool = payload.ExtractDiscTool(Path.Combine(staging, "disc-tool"));
+        var header = await InputValidation.ReadDiscHeaderAsync(nodTool, options.GamePath,
+            cancellationToken);
+        var release = InputValidation.EnsureCompatibleDisc(header, manifest);
+        var canonicalRetroRoot = options.RetroDirectoryPath is null
+            ? null
+            : RetroRewindSource.ResolveRetroRewind6(options.RetroDirectoryPath);
+        ValidateRetroOptions(canonicalRetroRoot, options.RetroWfcPayloadMode);
+
+        var retroCompileInputs = canonicalRetroRoot is null
+            ? null
+            : SnapshotRetroRewindCompileInputs(canonicalRetroRoot,
+                Path.Combine(staging, "compile-inputs"), cancellationToken);
+        if (options.Portable)
+        {
+            var portableRoot = PortableRoot.Create(parent);
+            _reporter.Diagnostic($"Installing as a portable installation under {portableRoot}.");
+        }
+
         var candidateToolkitFingerprint = manifest.ToolkitFingerprint;
         var candidateToolkitPackageFingerprint = manifest.ToolkitPackageFingerprint;
         var candidateRuntimeAssetsFingerprint = manifest.RuntimeAssetsFingerprint;
@@ -52,7 +74,7 @@ internal sealed class InstallerEngine
         var installedToolkitPackageFingerprint = existing.IsPresent
             ? existing.ResolveToolkitPackageFingerprint()
             : "";
-        var reusableGameAssets = FindReusableGameAssets(existing, manifest);
+        var reusableGameAssets = FindReusableGameAssets(existing, release);
 
         var sameToolkit = existing.IsPresent && reusableGameAssets is not null &&
                           installedToolkitFingerprint.Equals(candidateToolkitFingerprint,
@@ -71,7 +93,7 @@ internal sealed class InstallerEngine
         var extractWorkspace = !sameToolkit || !runtimeAssetsCurrent;
 
         _reporter.Progress(InstallStages.ExtractToolkit,
-            "Inspecting the release's local recompilation toolkit...", 1);
+            "Inspecting the release's local recompilation toolkit...", 4);
         if (extractToolkit) payload.ExtractDirectory(InstalledLayout.ToolkitDirectoryName, toolkit);
         if (extractWorkspace)
         {
@@ -85,30 +107,10 @@ internal sealed class InstallerEngine
         payload.ExtractEntry(InstalledLayout.PayloadManifestFileName,
             Path.Combine(staging, InstalledLayout.PayloadManifestFileName));
 
-        var nodTool = extractToolkit ? Path.Combine(toolkit, "nodtool.exe") : installedNodTool;
-        _reporter.Progress(InstallStages.Validate, "Checking the Wii disc image...", 2);
-        var header = await InputValidation.ReadDiscHeaderAsync(nodTool, options.GamePath,
-            cancellationToken);
-        InputValidation.EnsureCompatibleDisc(header, manifest);
-        var canonicalRetroRoot = options.RetroDirectoryPath is null
-            ? null
-            : RetroRewindSource.ResolveRetroRewind6(options.RetroDirectoryPath);
-        ValidateRetroOptions(canonicalRetroRoot, options.RetroWfcPayloadMode, manifest);
-
-        var retroCompileInputs = canonicalRetroRoot is null
-            ? null
-            : SnapshotRetroRewindCompileInputs(canonicalRetroRoot,
-                Path.Combine(staging, "compile-inputs"), cancellationToken);
-        if (options.Portable)
-        {
-            var portableRoot = PortableRoot.Create(parent);
-            _reporter.Diagnostic($"Installing as a portable installation under {portableRoot}.");
-        }
-
         if (sameToolkit)
         {
             var desiredInputDrift = ProductRepairService.FindDesiredInputDrift(existing,
-                candidateToolkitFingerprint, manifest.ExpectedDolSha256, manifest.ExpectedRelSha256);
+                candidateToolkitFingerprint, release.DolSha256, release.RelSha256);
             if (desiredInputDrift.Retro && retroCompileInputs is null)
                 throw new InvalidOperationException(
                     "This release changes the clean game inputs used by the installed Retro Rewind product. " +
@@ -116,7 +118,7 @@ internal sealed class InstallerEngine
 
             var reconciliation = await ReconcileSameToolkitAsync(existing, retroCompileInputs,
                 canonicalRetroRoot, options.RetroWfcPayloadMode, Path.Combine(staging, "repair"),
-                manifest.ExpectedDolSha256, manifest.ExpectedRelSha256, cancellationToken);
+                release.DolSha256, release.RelSha256, cancellationToken);
             var remainingCancellation = reconciliation.PublicationCommitted
                 ? CancellationToken.None
                 : cancellationToken;
@@ -128,11 +130,10 @@ internal sealed class InstallerEngine
 
             remainingCancellation.ThrowIfCancellationRequested();
             EnsureReconciliationCurrent(existing, candidateToolkitFingerprint, retroCompileInputs,
-                manifest.ExpectedDolSha256, manifest.ExpectedRelSha256,
-                reconciliation.CachedRetroWfcPayloadMatches);
+                release.DolSha256, release.RelSha256, reconciliation.CachedRetroWfcPayloadMatches);
 
             var updatedState = BuildInstallState(existing.ReadInstallState(), installDirectory, manifest,
-                retroCompileInputs, canonicalRetroRoot, options.RetroWfcPayloadMode);
+                release, retroCompileInputs, canonicalRetroRoot, options.RetroWfcPayloadMode);
             PrepareMetadata(staging, manifest, updatedState);
             remainingCancellation.ThrowIfCancellationRequested();
 
@@ -162,11 +163,11 @@ internal sealed class InstallerEngine
         if (reusableGameAssets is null)
         {
             await ExtractGameAssetsAsync(nodTool, options.GamePath,
-                Path.Combine(staging, "GameAssets"), manifest, cancellationToken);
+                Path.Combine(staging, "GameAssets"), release, cancellationToken);
         }
 
         await PublishToolkitAndReconcileProductsAsync(existing, staging, workspace, manifest,
-            previousState, options, canonicalRetroRoot, retroCompileInputs,
+            release, previousState, options, canonicalRetroRoot, retroCompileInputs,
             publishGameAssets: reusableGameAssets is null, createShortcuts: firstInstall,
             cancellationToken: cancellationToken);
     }
@@ -190,7 +191,7 @@ internal sealed class InstallerEngine
         ["generated", "build", "native-build", "Assets", "PulsarPacks"];
 
     private async Task PublishToolkitAndReconcileProductsAsync(Installation existing, string staging,
-        string stagedWorkspace, PayloadManifest manifest, InstallState? previousState,
+        string stagedWorkspace, PayloadManifest manifest, GameRelease release, InstallState? previousState,
         InstallOptions options, string? canonicalRetroRoot,
         RetroRewindCompileInputs? retroCompileInputs,
         bool publishGameAssets, bool createShortcuts, CancellationToken cancellationToken)
@@ -209,7 +210,7 @@ internal sealed class InstallerEngine
         }
 
 
-        var state = BuildInstallState(previousState, installDirectory, manifest,
+        var state = BuildInstallState(previousState, installDirectory, manifest, release,
             compileInputs: null, canonicalRetroRoot, options.RetroWfcPayloadMode);
         PrepareMetadata(staging, manifest, state);
 
@@ -229,10 +230,9 @@ internal sealed class InstallerEngine
 
         var reconciliation = await ReconcileSameToolkitAsync(existing, retroCompileInputs,
             canonicalRetroRoot, options.RetroWfcPayloadMode, repairScratch: null,
-            manifest.ExpectedDolSha256, manifest.ExpectedRelSha256, cancellationToken);
+            release.DolSha256, release.RelSha256, cancellationToken);
         EnsureReconciliationCurrent(existing, manifest.ToolkitFingerprint, retroCompileInputs,
-            manifest.ExpectedDolSha256, manifest.ExpectedRelSha256,
-            reconciliation.CachedRetroWfcPayloadMatches);
+            release.DolSha256, release.RelSha256, reconciliation.CachedRetroWfcPayloadMatches);
     }
 
     private Task<ProductRepairService.ReconciliationResult> ReconcileSameToolkitAsync(Installation existing,
@@ -357,7 +357,8 @@ internal sealed class InstallerEngine
     }
 
     private static InstallState BuildInstallState(InstallState? previousState, string installDirectory,
-        PayloadManifest manifest, RetroRewindCompileInputs? compileInputs, string? canonicalRetroRoot,
+        PayloadManifest manifest, GameRelease release, RetroRewindCompileInputs? compileInputs,
+        string? canonicalRetroRoot,
         RetroWfcPayloadMode payloadMode,
         RetroWfcPayloadSnapshot? retroWfcPayloadSnapshot = null)
     {
@@ -372,8 +373,8 @@ internal sealed class InstallerEngine
             ProductId = ProductInfo.Id,
             RetroRewindInstalled = previousState?.RetroRewindInstalled ?? false,
             ToolkitReleaseTag = manifest.ToolkitReleaseTag,
-            DolSha256 = manifest.ExpectedDolSha256,
-            RelSha256 = manifest.ExpectedRelSha256,
+            DolSha256 = release.DolSha256,
+            RelSha256 = release.RelSha256,
             RetroRewindCodePulSha256 = previousState?.RetroRewindCodePulSha256 ?? "",
             RetroRewindCompileInputsSha256 = previousState?.RetroRewindCompileInputsSha256 ?? "",
             RetroWfcPayloadMode = previousState?.RetroWfcPayloadMode ?? "",
@@ -448,8 +449,7 @@ internal sealed class InstallerEngine
             Path.Combine(InstalledLayout.Workspace(installDirectory), "runtime", "assets")));
     }
 
-    private static void ValidateRetroOptions(string? canonicalRetroRoot, RetroWfcPayloadMode mode,
-        PayloadManifest manifest)
+    private static void ValidateRetroOptions(string? canonicalRetroRoot, RetroWfcPayloadMode mode)
     {
         if (canonicalRetroRoot is null && mode != RetroWfcPayloadMode.NotApplicable)
             throw new InvalidOperationException(
@@ -457,11 +457,9 @@ internal sealed class InstallerEngine
         if (canonicalRetroRoot is not null && mode == RetroWfcPayloadMode.NotApplicable)
             throw new InvalidOperationException(
                 "Download the Retro-WFC payload, or explicitly skip the optional payload.");
-        if (canonicalRetroRoot is not null && mode == RetroWfcPayloadMode.Online)
-            InputValidation.ValidateRetroWfcPayloadUri(manifest.RetroWfcPayloadUri);
     }
 
-    private string? FindReusableGameAssets(Installation existing, PayloadManifest manifest)
+    private string? FindReusableGameAssets(Installation existing, GameRelease release)
     {
         var dataRoot = existing.GameDataDirectory;
         // No fst.bin simply means nothing was extracted here before; anything past that gate is an
@@ -470,7 +468,7 @@ internal sealed class InstallerEngine
         if (!File.Exists(Path.Combine(dataRoot, "sys", "fst.bin"))) return null;
         try
         {
-            ValidateExtractedGame(dataRoot, manifest);
+            ValidateExtractedGame(dataRoot, release);
             return dataRoot;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
@@ -482,7 +480,7 @@ internal sealed class InstallerEngine
     }
 
     private async Task ExtractGameAssetsAsync(string nodTool, string gamePath, string destination,
-        PayloadManifest manifest, CancellationToken cancellationToken)
+        GameRelease release, CancellationToken cancellationToken)
     {
         _reporter.Progress(InstallStages.ExtractDisc,
             "Extracting the game disc. This is the longest preparation step...", 6);
@@ -497,15 +495,16 @@ internal sealed class InstallerEngine
             cancellationToken);
         if (extraction.ExitCode != 0)
             throw new InvalidDataException("Game extraction failed. " + extraction.CombinedOutput.Trim());
-        ValidateExtractedGame(dataRoot, manifest);
+        ValidateExtractedGame(dataRoot, release);
     }
 
-    private static void ValidateExtractedGame(string dataRoot, PayloadManifest manifest)
+    internal static void ValidateExtractedGame(string dataRoot, GameRelease release)
     {
         var dol = Path.Combine(dataRoot, "sys", "main.dol");
         var rel = Path.Combine(dataRoot, "files", "rel", "StaticR.rel");
         var fst = Path.Combine(dataRoot, "sys", "fst.bin");
-        var missing = new[] { dol, rel, fst }.Where(path => !File.Exists(path))
+        var boot = Path.Combine(dataRoot, "sys", "boot.bin");
+        var missing = new[] { dol, rel, fst, boot }.Where(path => !File.Exists(path))
             .Select(path => Path.GetRelativePath(dataRoot, path)).ToList();
         if (missing.Count > 0)
             throw new InvalidDataException(
@@ -513,10 +512,13 @@ internal sealed class InstallerEngine
                 string.Join(", ", missing) + ".");
 
         var mismatches = new List<string>();
+        var discGameId = Installation.ReadDiscGameId(dataRoot);
+        if (!discGameId.Equals(release.GameId, StringComparison.Ordinal))
+            mismatches.Add($"sys/boot.bin names {discGameId}");
         foreach (var (name, path, expected) in new[]
                  {
-                     ("main.dol", dol, manifest.ExpectedDolSha256),
-                     ("StaticR.rel", rel, manifest.ExpectedRelSha256)
+                     ("main.dol", dol, release.DolSha256),
+                     ("StaticR.rel", rel, release.RelSha256)
                  })
         {
             var actual = InputValidation.Sha256File(path);
@@ -527,7 +529,7 @@ internal sealed class InstallerEngine
 
         if (mismatches.Count > 0)
             throw new InvalidDataException(
-                "The disc is RMCP01 but its game code does not match the supported clean PAL revision: " +
+                $"The disc is {release.GameId} but its game data does not match the supported clean revision: " +
                 string.Join("; ", mismatches) + ". " +
                 "Patched or otherwise modified game code cannot be installed safely.");
     }

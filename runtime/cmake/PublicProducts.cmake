@@ -63,6 +63,9 @@ function(mkw_apply_translated_compile_options target)
     # its state in guest memory and the CpuContext, so the canaries only cost cycles there.
     target_compile_options(${target} PRIVATE
         -O2 ${MKW_TRANSLATED_PPC_FP_OPTIONS} -fno-slp-vectorize -w -pipe
+        # Upstream's cold-path splitting is measured on desktop CPUs only; the Quest keeps its
+        # measured code layout until it is A/B-tested there.
+        "$<$<NOT:$<PLATFORM_ID:Android>>:SHELL:-mllvm -hot-cold-split=true>"
         $<$<PLATFORM_ID:Android>:-fno-stack-protector>)
 endfunction()
 
@@ -81,8 +84,14 @@ function(mkw_bound_translated_compiles target)
     endif()
 endfunction()
 
+# The region the translator built for; translated code and runtime/game bind addresses to it.
+if(NOT DEFINED MKW_TRANSLATED_GUEST_REGION)
+    message(FATAL_ERROR "The translator shard manifest names no guest region; re-run emit-build-shards.")
+endif()
+
 function(mkw_configure_translated_target target)
     mkw_configure_object_target(${target})
+    target_compile_definitions(${target} PRIVATE MKW_TRANSLATED_GUEST_REGION=${MKW_TRANSLATED_GUEST_REGION})
     mkw_apply_translated_compile_options(${target})
     mkw_bound_translated_compiles(${target})
 endfunction()
@@ -103,6 +112,7 @@ target_compile_features(mkw_game_data PRIVATE cxx_std_20)
 # On Android SDL owns the entry point: main.cpp includes SDL_main.h so that
 # SDLActivity's nativeRunMain finds SDL_main inside libmain.so.
 target_compile_definitions(mkw_game_data PRIVATE
+    MKW_TRANSLATED_GUEST_REGION=${MKW_TRANSLATED_GUEST_REGION}
     $<$<NOT:$<PLATFORM_ID:Android>>:SDL_MAIN_HANDLED>
     _DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION)
 if(MKW_SETUP_VERSION)
@@ -231,7 +241,7 @@ function(mkw_configure_product target)
         # instead of a ../ chain whose depth depends on the includer.
         "${MKW_GENERATED_PARENT_DIR}"
         "${MKW_RUNTIME_SOURCE_DIR}/.."
-        "${MKW_RUNTIME_SOURCE_DIR}/../aurora-main/include")
+        "${MKW_AURORA_DIR}/include")
     target_compile_definitions(${target} PRIVATE
         $<$<NOT:$<PLATFORM_ID:Android>>:SDL_MAIN_HANDLED>
         _DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION TARGET_PC)
@@ -274,7 +284,7 @@ function(mkw_configure_product target)
 
     if(MKW_PLATFORM_WINDOWS)
         target_link_libraries(${target} PRIVATE
-            dbghelp user32 winmm ws2_32 iphlpapi secur32 crypt32 windowsapp)
+            dbghelp user32 winmm ws2_32 iphlpapi secur32 crypt32 windowsapp bthprops)
 
         set_target_properties(${target} PROPERTIES WIN32_EXECUTABLE TRUE)
     elseif(MKW_PLATFORM_LINUX OR MKW_PLATFORM_MACOS_X86_64)
@@ -361,6 +371,18 @@ function(mkw_configure_product target)
     endif()
 endfunction()
 
+if(MKW_PLATFORM_WINDOWS)
+    enable_language(RC)
+endif()
+
+# Own object library so the products' C++ options never reach the resource compiler.
+function(mkw_add_product_icon target)
+    if(MKW_PLATFORM_WINDOWS)
+        add_library(${target}_icon OBJECT "${MKW_RUNTIME_SOURCE_DIR}/resources/${target}.rc")
+        target_sources(${target} PRIVATE $<TARGET_OBJECTS:${target}_icon>)
+    endif()
+endfunction()
+
 # Android ships each product as the shared library SDLActivity loads; the base
 # game keeps SDL's conventional "main" name and Retro Rewind gets its own so a
 # dual-flavour app can bundle both without a name clash.
@@ -371,6 +393,7 @@ else()
     add_executable(WiiCompiled "${MKW_BASE_PRODUCT_SOURCE}")
 endif()
 mkw_configure_product(WiiCompiled)
+mkw_add_product_icon(WiiCompiled)
 target_sources(WiiCompiled PRIVATE $<TARGET_OBJECTS:mkw_base_registration>)
 target_precompile_headers(WiiCompiled PRIVATE
     "${MKW_RUNTIME_SOURCE_DIR}/include/mkw_pch.h")
@@ -398,6 +421,7 @@ if(MKW_HAVE_RETRO_REWIND)
         add_executable(RetroRewind "${MKW_RETRO_REWIND_PRODUCT_SOURCE}")
     endif()
     mkw_configure_product(RetroRewind)
+    mkw_add_product_icon(RetroRewind)
     target_precompile_headers(RetroRewind REUSE_FROM WiiCompiled)
     target_sources(RetroRewind PRIVATE $<TARGET_OBJECTS:mkw_retro_registration>)
     if(TARGET mkw_retro_sensitive)

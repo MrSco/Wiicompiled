@@ -81,6 +81,7 @@ static wgpu::Adapter g_adapter;
 wgpu::Instance g_instance;
 static wgpu::AdapterInfo g_adapterInfo;
 static wgpu::SurfaceCapabilities g_surfaceCapabilities;
+static std::atomic_bool g_vsyncEnabled{false};
 bool g_bcTexturesSupported;
 bool g_timestampQueriesSupported = false;
 // Written by Dawn's device-loss callback and consumed at ordered frame boundaries. Keep the
@@ -129,8 +130,10 @@ RenderTargetSize clamp_frame_buffer_size(uint32_t width, uint32_t height) noexce
   return {budgeted.width, budgeted.height};
 }
 
-// V-Sync is never enabled: the guest drives its own pacing, and blocking in Present() couples the
-// whole machine to the monitor (a 120 FPS target on a 75 Hz display runs in slow motion).
+// V-Sync is opt-in (AuroraConfig.vsync): the guest drives its own pacing, and blocking in Present()
+// couples the whole machine to the monitor (a 120 FPS target on a 75 Hz display runs in slow
+// motion). With it on, the presenter admits at most one present per refresh period and drops the
+// rest (see admit_display_present in aurora.cpp), so Fifo rarely blocks.
 wgpu::PresentMode best_present_mode() {
   const auto supports = [](const wgpu::PresentMode candidate) {
     for (size_t i = 0; i < g_surfaceCapabilities.presentModeCount; ++i) {
@@ -140,6 +143,12 @@ wgpu::PresentMode best_present_mode() {
     }
     return false;
   };
+  // A registered stereo provider means an OpenXR session: the headset paces itself, and the desktop
+  // mirror's Present() runs under the queue-submit mutex the eyes need, so it must never block.
+  if (g_vsyncEnabled.load(std::memory_order_acquire) && !stereo_frame_provider_active()) {
+    // Every WebGPU surface supports Fifo.
+    return wgpu::PresentMode::Fifo;
+  }
   // Vulkan prefers Mailbox, every other backend Immediate. Under window capture the Vulkan driver
   // cannot flip and Immediate leaks about a megabyte per present until the device is lost.
   const bool preferMailbox = g_backendType == wgpu::BackendType::Vulkan;
@@ -961,6 +970,7 @@ bool initialize(AuroraBackend auroraBackend) {
     return false;
   }
   auto surfaceFormat = best_surface_format();
+  g_vsyncEnabled.store(g_config.vsync, std::memory_order_release);
   auto presentMode = best_present_mode();
   Log.info("Using surface format {}, present mode {}", magic_enum::enum_name(surfaceFormat),
            magic_enum::enum_name(presentMode));
@@ -1074,6 +1084,15 @@ void release_surface() noexcept {
   }
 }
 
+bool vsync_enabled() noexcept { return g_vsyncEnabled.load(std::memory_order_acquire); }
+
+void set_vsync_enabled(bool enabled) noexcept { g_vsyncEnabled.store(enabled, std::memory_order_release); }
+
+bool blocking_present_mode() noexcept {
+  const auto mode = g_graphicsConfig.surfaceConfiguration.presentMode;
+  return mode == wgpu::PresentMode::Fifo || mode == wgpu::PresentMode::FifoRelaxed;
+}
+
 bool refresh_surface(bool recreate) {
   if (!g_instance || !g_device) {
     return false;
@@ -1141,6 +1160,11 @@ void resize_swapchain(uint32_t width, uint32_t height, uint32_t native_width, ui
   }
   g_graphicsConfig.surfaceConfiguration.width = native_width;
   g_graphicsConfig.surfaceConfiguration.height = native_height;
+  // A V-Sync toggle or a stereo provider (un)registering reconfigures the surface through here.
+  if (const auto presentMode = best_present_mode(); presentMode != g_graphicsConfig.surfaceConfiguration.presentMode) {
+    Log.info("Using present mode {}", magic_enum::enum_name(presentMode));
+    g_graphicsConfig.surfaceConfiguration.presentMode = presentMode;
+  }
   auto surfaceConfiguration = g_graphicsConfig.surfaceConfiguration;
   surfaceConfiguration.device = g_device;
   g_surface.Configure(&surfaceConfiguration);

@@ -790,21 +790,17 @@ struct DlMayContainDrawVisitor {
 
     bool OnNop(uint8_t) { return true; }
     bool OnBpReg(const uint8_t*, uint32_t) { return true; }
-    // An array base/stride write means the list is setting up indexed geometry.
-    bool OnCpReg(const uint8_t*, uint8_t reg, uint32_t) { return !(reg >= 0xA0 && reg <= 0xBF); }
+    // CP writes must reach the HLE vertex state, and indexed XF loads need their
+    // array resolved, so neither may be passed through raw.
+    bool OnCpReg(const uint8_t*, uint8_t, uint32_t) { return false; }
     bool OnXfReg(const uint8_t*, uint32_t) { return true; }
-    bool OnIndexedXf(const uint8_t*, uint8_t, uint32_t) { return true; }
+    bool OnIndexedXf(const uint8_t*, uint8_t, uint32_t) { return false; }
     bool OnInvalidateVertexCache(uint8_t) { return true; }
     // Draw opcodes reach this too (kHandlesDraw is false): a draw opcode, or a
     // command byte this walker does not model, both mean "assume it draws".
     bool OnUnknownCommand(uint8_t) { return false; }
-    bool OnCallDisplayList(uint32_t addr, uint32_t size, int depth) {
-        if (addr == 0 || size == 0) return true;
-        const uint8_t* nested = static_cast<const uint8_t*>(GuestToHostPtr(addr, size));
-        if (!nested) return false;
-        DlMayContainDrawVisitor child;
-        return WalkDisplayList(nested, size, child, depth + 1);
-    }
+    // Aurora skips nested calls, so the child has to be flattened.
+    bool OnCallDisplayList(uint32_t addr, uint32_t size, int) { return addr == 0 || size == 0; }
 };
 
 static bool DisplayListMayContainDraw(const uint8_t* data, uint32_t nbytes) {

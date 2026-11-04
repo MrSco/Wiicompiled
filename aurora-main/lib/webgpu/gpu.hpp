@@ -68,6 +68,12 @@ void shutdown();
 void fail_if_device_lost() noexcept;
 void release_surface() noexcept;
 bool refresh_surface(bool recreate = true);
+// AuroraConfig.vsync / aurora_enable_vsync. The present mode follows it at the next surface
+// (re)configuration, and only while no stereo frame provider is registered.
+bool vsync_enabled() noexcept;
+void set_vsync_enabled(bool enabled) noexcept;
+// Whether the configured present mode can block in Present()/acquire (Fifo, FifoRelaxed).
+bool blocking_present_mode() noexcept;
 void resize_swapchain(uint32_t width, uint32_t height, uint32_t native_width, uint32_t native_height,
                       bool force = false);
 TextureWithSampler create_render_texture(uint32_t width, uint32_t height, bool multisampled);

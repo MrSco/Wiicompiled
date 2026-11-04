@@ -11,9 +11,15 @@
 #   - run as `cmake -DSDL_SOURCE_DIR=<dir> -P AuroraSDL3Patches.cmake` from the
 #     FetchContent PATCH_COMMAND for a freshly extracted tarball.
 
+# An optional fifth argument is the text that proves the patch applied, for a patch whose result a
+# later patch edits (the full `new` text then no longer appears in a tree patched in place).
 function(_aurora_sdl3_replace file description old new)
   file(READ "${file}" _content)
-  string(FIND "${_content}" "${new}" _already)
+  set(_applied "${new}")
+  if (ARGC GREATER 4)
+    set(_applied "${ARGV4}")
+  endif ()
+  string(FIND "${_content}" "${_applied}" _already)
   if (NOT _already EQUAL -1)
     return()
   endif ()
@@ -376,6 +382,24 @@ static bool HIDAPI_DriverWii_InitDevice(SDL_HIDAPI_Device *device)
     values[0] = -(((float)x - ctx->m_fAccelZeroG[0]) / ctx->m_fAccelPerG[0]) * SDL_STANDARD_GRAVITY;
     values[1] = (((float)z - ctx->m_fAccelZeroG[2]) / ctx->m_fAccelPerG[2]) * SDL_STANDARD_GRAVITY;
     values[2] = (((float)y - ctx->m_fAccelZeroG[1]) / ctx->m_fAccelPerG[1]) * SDL_STANDARD_GRAVITY;
+]==]
+  # The all-zero report patch below inserts its early return inside this result.
+[==[    values[1] = (((float)z - ctx->m_fAccelZeroG[2]) / ctx->m_fAccelPerG[2]) * SDL_STANDARD_GRAVITY;
+]==])
+  # A report whose accelerometer bytes are all zero is a remote not yet streaming motion, not a
+  # reading; decoding it would jolt the motion sensor. A separate patch on top of the decode patch,
+  # so SDL trees already patched in place by an earlier configure still apply it.
+  _aurora_sdl3_replace("${_wii}" "Wii Remote accelerometer drops all-zero reports"
+[==[    z = ((data->rgucAccelerometer[2] << 2) | ((data->rgucBaseButtons[1] >> 5) & 0x02));
+
+    values[0] = -(((float)x - ctx->m_fAccelZeroG[0]) / ctx->m_fAccelPerG[0]) * SDL_STANDARD_GRAVITY;
+]==]
+[==[    z = ((data->rgucAccelerometer[2] << 2) | ((data->rgucBaseButtons[1] >> 5) & 0x02));
+    if (x == 0 && y == 0 && z == 0) {
+        return;
+    }
+
+    values[0] = -(((float)x - ctx->m_fAccelZeroG[0]) / ctx->m_fAccelPerG[0]) * SDL_STANDARD_GRAVITY;
 ]==])
 endfunction()
 

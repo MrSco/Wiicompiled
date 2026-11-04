@@ -55,6 +55,7 @@ std::vector<AuroraEvent> g_events;
 std::atomic_bool g_backgrounded = false;
 std::atomic_bool g_nativeResizePending = false;
 std::atomic<AuroraDisplayMode> g_displayMode{AURORA_DISPLAY_MODE_WINDOWED};
+std::atomic_uint64_t g_refreshPeriodNanos = 0;
 #if defined(SDL_PLATFORM_ANDROID)
 // SDL's own activity mutex (Android_LockActivityMutex) is internal and not
 // exported from libSDL3.so, so SurfaceLock owns an equivalent one. Recursive
@@ -176,6 +177,21 @@ Vec2<int> scale_frame_buffer_to_aspect(int w, int h, float scale, float aspect) 
   return {static_cast<int>(size.width), static_cast<int>(size.height)};
 }
 
+// Refreshed at window creation and on SDL's display events, on the thread that pumps them; the
+// render thread's resize path never queries SDL displays.
+void update_refresh_period() noexcept {
+  const SDL_DisplayID display = g_window != nullptr ? SDL_GetDisplayForWindow(g_window) : 0;
+  const SDL_DisplayMode* mode = display != 0 ? SDL_GetCurrentDisplayMode(display) : nullptr;
+  uint64_t period = 0;
+  if (mode != nullptr && mode->refresh_rate_numerator > 0 && mode->refresh_rate_denominator > 0) {
+    period = static_cast<uint64_t>(mode->refresh_rate_denominator) * 1'000'000'000ull /
+             static_cast<uint64_t>(mode->refresh_rate_numerator);
+  } else if (mode != nullptr && mode->refresh_rate > 0.f) {
+    period = static_cast<uint64_t>(1e9 / mode->refresh_rate);
+  }
+  g_refreshPeriodNanos.store(period, std::memory_order_relaxed);
+}
+
 void resize_swapchain() noexcept {
 #if defined(SDL_PLATFORM_ANDROID)
   SurfaceLock surfaceLock;
@@ -268,6 +284,10 @@ void process_event(SDL_Event& event) {
       set_display_mode(get_fullscreen() ? AURORA_DISPLAY_MODE_WINDOWED : AURORA_DISPLAY_MODE_BORDERLESS);
       g_nativeResizePending.store(true, std::memory_order_release);
     }
+    break;
+  case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+  case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+    update_refresh_period();
     break;
   case SDL_EVENT_WINDOW_MOVED: {
     g_events.push_back(AuroraEvent{
@@ -372,6 +392,9 @@ bool create_window(AuroraBackend backend) {
   SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
 #if TARGET_OS_IOS || TARGET_OS_TV
   flags |= SDL_WINDOW_FULLSCREEN;
+  if (g_config.startHidden) {
+    flags |= SDL_WINDOW_HIDDEN;
+  }
 #else
   flags |= SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;
   if (g_config.startFullscreen) {
@@ -435,6 +458,7 @@ bool create_window(AuroraBackend backend) {
     return false;
   }
   SDL_SetWindowMinimumSize(g_window, 640, 480);
+  update_refresh_period();
   g_displayMode.store(g_config.startFullscreen ? AURORA_DISPLAY_MODE_BORDERLESS : AURORA_DISPLAY_MODE_WINDOWED,
                       std::memory_order_release);
 #if defined(_WIN32)
@@ -584,7 +608,8 @@ bool is_paused() noexcept {
   }
   const auto flags = SDL_GetWindowFlags(g_window);
   if ((flags & SDL_WINDOW_HIDDEN) != 0u) {
-    return true;
+    // A window kept hidden on purpose (startHidden) still renders.
+    return !g_config.startHidden;
   }
   // Wait until the window has received focus before respecting pauseOnFocusLost
   if (!g_gotFocus) {
@@ -743,6 +768,8 @@ void set_display_mode(AuroraDisplayMode mode) {
   TRY_WARN(push_custom_event(CustomEvent::FutureResize), "Failed to queue fullscreen resize event: {}",
            SDL_GetError());
 }
+
+uint64_t refresh_period_nanos() noexcept { return g_refreshPeriodNanos.load(std::memory_order_relaxed); }
 
 AuroraDisplayMode get_display_mode() { return g_displayMode.load(std::memory_order_acquire); }
 

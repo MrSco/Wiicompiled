@@ -1580,7 +1580,14 @@ ends, including mid-frame flushes, so live setting changes cannot invalidate pen
 
 ## Current limitations
 
-- Only the project's supported PAL `RMCP01` translation has race instrumentation addresses.
+- Only the PAL `RMCP01` manifest (`projects/mkwii/recomp.yml`) declares the race
+  instrumentation observers. NTSC-U `RMCE01` and NTSC-J `RMCJ01` builds (upstream's region
+  support) therefore never leave the virtual screen: no immersive race, first-person camera or
+  cockpit. The VR runtime code names every guest address by its PAL identity (`MKW_GADDR`,
+  `MKW_GUEST_FUNC`), so those builds read the right memory. Where `guest_versions.inc` knows no
+  counterpart (NTSC-U's ClipInfoMgr constants table and the bike-handle vtable, both in StaticR
+  data) the feature falls back: the game's own `ClipInfoMgr::UpdateScreenInfo` runs before the
+  object-culling plane override, and no handlebar is recognised. Untested on NTSC discs.
 - The tracked controllers are always Player 1's Wii Remote; there is no left-handed swap, and only
   the Touch and simple controller profiles have suggested bindings. The Wii Remote presentation
   still needs headset validation: cursor direction and roll, trick/wheelie motion, rumble strength

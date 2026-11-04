@@ -59,7 +59,7 @@ function(mkw_configure_object_target target)
         # Workspace root, so translator output is spelled "generated/<x>.h"
         # instead of a ../ chain whose depth depends on the includer.
         "${MKW_RUNTIME_SOURCE_DIR}/.."
-        "${MKW_RUNTIME_SOURCE_DIR}/../aurora-main/include")
+        "${MKW_AURORA_DIR}/include")
     # The parent of a translator output tree named by MKW_GENERATED_DIR
     # (cmake/PublicProducts.cmake), for the targets that include it.
     if(MKW_GENERATED_PARENT_DIR)
@@ -79,7 +79,7 @@ function(mkw_runtime_link_dependencies target scope)
         target_link_libraries(${target} ${scope} ${MKW_OPENXR_TARGET})
     endif()
     if(MKW_PLATFORM_WINDOWS)
-        target_link_libraries(${target} ${scope} shell32 windowsapp)
+        target_link_libraries(${target} ${scope} shell32 windowsapp bthprops)
     elseif(MKW_PLATFORM_LINUX OR MKW_PLATFORM_MACOS_X86_64)
         # ${CMAKE_DL_LIBS} for music_attenuation.cpp's dlopen of libdbus-1 (MPRIS
         # media monitoring). Empty on platforms where dl* is already in libc/libSystem.

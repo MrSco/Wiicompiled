@@ -1,6 +1,8 @@
 #pragma once
 
+#include "friend_code_keyboard.h"
 #include "settings_overlay.h"
+#include "steam_input_layout.h"
 #include "runtime_config.h"
 #include "fiber_manager.h"
 #include "gx_thread.h"
@@ -18,9 +20,8 @@
 #endif
 
 extern "C" bool g_dynamicAspectRatioEnabled;
-void ConfigureMkwDynamicAspect(bool widescreen, bool forceAspect169, uint32_t surfaceWidth, uint32_t surfaceHeight);
-void SetMkwForceAspect169(bool enabled);
-bool MkwForceAspect169Requested();
+void ConfigureMkwDynamicAspect(bool widescreen, bool forceAspect, uint32_t surfaceWidth, uint32_t surfaceHeight);
+void SetMkwForceAspect(bool enabled);
 void UpdateMkwDynamicAspectSurface(uint32_t surfaceWidth, uint32_t surfaceHeight);
 // Arms the "keep EGG::Frustum's projection scale" flag on every screen that
 // renders to a fixed-size offscreen target. Cheap and idempotent; called from
@@ -63,6 +64,7 @@ inline void Flush(bool force = false) {
 // process directly and do not run the crash/atexit paths.
 [[noreturn]] inline void ExitForAuroraWindowClose() noexcept {
     settings_overlay::ReleaseControllers();
+    SteamInputLayout::Release();
     WindowPlacementPersistence::Flush(true);
     // Ending the process here skips aurora_shutdown, which is where Dawn's Vulkan pipeline cache
     // and the queued pipeline recipes would otherwise reach disk. Without this store every
@@ -127,6 +129,8 @@ inline void ProcessAuroraEvents(const AuroraEvent* events) {
         g_mkwDynamicAspectSurfacePending.store(true, std::memory_order_release);
     }
     settings_overlay::HandleEvents(events);
+    FriendCodeKeyboard::HandleEvents(events);
+    SteamInputLayout::HandleEvents(events);
 }
 
 inline void ApplyPendingMkwDynamicAspectSurface() {
