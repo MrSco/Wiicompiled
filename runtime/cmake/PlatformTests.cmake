@@ -72,6 +72,25 @@ target_compile_features(mkw_motion_trick_tests PRIVATE cxx_std_17)
 target_compile_options(mkw_motion_trick_tests PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-ffast-math>)
 add_test(NAME mkw_motion_trick_tests COMMAND mkw_motion_trick_tests)
 
+# Voice chat's codec wrappers, jitter buffer and signal helpers need no audio
+# device or network.
+include("${CMAKE_CURRENT_LIST_DIR}/Opus.cmake")
+add_executable(mkw_voice_tests
+    "${MKW_TEST_RUNTIME_DIR}/tests/voice_tests.cpp"
+    "${MKW_TEST_RUNTIME_DIR}/src/voice/voice_codec.cpp"
+    "${MKW_TEST_RUNTIME_DIR}/src/voice/voice_jitter_buffer.cpp")
+target_include_directories(mkw_voice_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
+target_link_libraries(mkw_voice_tests PRIVATE mkw::opus)
+target_compile_features(mkw_voice_tests PRIVATE cxx_std_17)
+add_test(NAME mkw_voice_tests COMMAND mkw_voice_tests)
+
+add_executable(mkw_voice_config_tests "${MKW_TEST_RUNTIME_DIR}/tests/voice_config_tests.cpp")
+target_include_directories(mkw_voice_config_tests PRIVATE
+    "${MKW_TEST_RUNTIME_DIR}/include"
+    "${MKW_TEST_RUNTIME_DIR}/third_party/toml11")
+target_compile_features(mkw_voice_config_tests PRIVATE cxx_std_20)
+add_test(NAME mkw_voice_config_tests COMMAND mkw_voice_config_tests)
+
 # The emulated Bluetooth controller is pure host code.
 add_executable(mkw_bluetooth_controller_tests
     "${MKW_TEST_RUNTIME_DIR}/tests/bluetooth_controller_tests.cpp"

@@ -187,7 +187,7 @@ function(mkw_configure_product target)
     target_compile_features(${target} PRIVATE cxx_std_20)
     mkw_apply_common_compile_options(${target})
     target_link_libraries(${target} PRIVATE
-        mkw_platform mkw_base_shared mkw::pugixml mkw::toml11 mkw::cryptopp mkw::mbedtls)
+        mkw_platform mkw_base_shared mkw::pugixml mkw::toml11 mkw::cryptopp mkw::mbedtls mkw::opus)
 
     target_link_libraries(${target} PRIVATE
         aurora::gx aurora::pad aurora::si aurora::vi aurora::mtx)

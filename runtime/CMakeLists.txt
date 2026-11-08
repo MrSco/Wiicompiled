@@ -121,6 +121,8 @@ add_library(mkw::toml11 ALIAS mkw_toml11)
 target_include_directories(mkw_toml11 SYSTEM INTERFACE third_party/toml11)
 target_compile_features(mkw_toml11 INTERFACE cxx_std_17)
 
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/Opus.cmake")
+
 # Wii ES signatures use the standard binary-field sect233r1 curve. Crypto++
 # supplies that curve, SHA-1, ECDSA and an OS-seeded CSPRNG. The complete 8.9.0
 # source distribution is vendored. Assembly and algorithm-specific SIMD units
@@ -422,7 +424,7 @@ else()
         target_compile_definitions(mkw_macos_native_compile PRIVATE SDL_MAIN_HANDLED TARGET_PC)
         target_link_libraries(mkw_macos_native_compile PRIVATE
             aurora::gx aurora::pad aurora::si aurora::vi aurora::mtx
-            mkw::pugixml mkw::toml11 mkw::cryptopp mkw::mbedtls)
+            mkw::pugixml mkw::toml11 mkw::cryptopp mkw::mbedtls mkw::opus)
         if(MKW_PLATFORM_MACOS_X86_64)
             target_link_libraries(mkw_macos_native_compile PRIVATE mkw::libco)
             target_compile_options(mkw_macos_native_compile PRIVATE

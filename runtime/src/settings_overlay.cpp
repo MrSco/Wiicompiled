@@ -10,6 +10,7 @@
 #include "music_attenuation.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
+#include "voice_settings_ui.h"
 #include "wiimote_host.h"
 
 #include <imgui.h>
@@ -1532,6 +1533,7 @@ void DrawTopBar() {
         DrawRebindPrompt();
         ImGui::EndMenu();
     }
+    VoiceSettingsUi::DrawMenu();
 
     const ImGuiStyle& style = ImGui::GetStyle();
     const float hideWidth = ImGui::CalcTextSize("Hide (F10)").x + style.FramePadding.x * 2.0f;
@@ -1667,13 +1669,16 @@ void HandleEvents(const AuroraEvent* events) noexcept {
             SetTopBarVisible(!g_topBarVisible);
             ApplyInputBlockState();
         }
-        if (!g_rebind.active && g_muteHotkey != PAD_KEY_INVALID &&
+        // A key pressed to set the push-to-talk key belongs to that capture alone.
+        const bool voiceKeyCapture = VoiceSettingsUi::CapturingKey();
+        VoiceSettingsUi::HandleSdlEvent(ev->sdl, g_rebind.active);
+        if (!g_rebind.active && !voiceKeyCapture && g_muteHotkey != PAD_KEY_INVALID &&
             IsToggleKey(ev->sdl, static_cast<SDL_Scancode>(g_muteHotkey))) {
             g_audioMuted = !g_audioMuted;
             AudioBackend::Instance().SetMuted(g_audioMuted);
             RuntimeConfigFile::SetAudioMuted(g_audioMuted);
         }
-        if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_ESCAPE)) {
+        if (!g_rebind.active && !voiceKeyCapture && IsToggleKey(ev->sdl, SDL_SCANCODE_ESCAPE)) {
             if (g_restartPromptOpen) {
                 g_restartPromptOpen = false;
             } else if (g_exitPromptOpen) {
@@ -1723,6 +1728,7 @@ void Draw() noexcept {
         DrawShaderCompilationStatus();
     }
     DrawFpsOverlay();
+    VoiceSettingsUi::DrawOverlays();
     DrawTopBar();
     DrawExitPrompt();
     DrawRestartPrompt();

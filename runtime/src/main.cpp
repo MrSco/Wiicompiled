@@ -69,6 +69,7 @@
 #include "aurora_events.h"
 #include "wiimote_host.h"
 #include "discord_presence.h"
+#include "voice_chat.h"
 #include "steam_input_layout.h"
 #include "fiber_manager.h"
 #include "gx_worker.h"
@@ -1378,6 +1379,9 @@ int RuntimeMain(int argc, char** argv) {
         if (!g_headless && RuntimeConfigFile::DiscordPresenceEnabled()) {
             DiscordPresence::Initialize(RuntimeConfigFile::DiscordClientId(), "Mario Kart Wii");
         }
+        if (!g_headless) {
+            VoiceChat::Initialize();
+        }
         SystemBridge::Initialize();
         TranslatedFunctionRegistry::Finalize();
 
@@ -1542,6 +1546,7 @@ int RuntimeMain(int argc, char** argv) {
         SteamInputLayout::Release();
         GxWorker::Stop();
         aurora_shutdown();
+        VoiceChat::Shutdown();
         DiscordPresence::Shutdown();
         SetRuntimeExitCodeImpl(0);
         ShutdownProcessTranscript();
@@ -1563,6 +1568,7 @@ int RuntimeMain(int argc, char** argv) {
         Wiimote::Shutdown();
         GxWorker::Stop();
         aurora_shutdown();
+        VoiceChat::Shutdown();
         DiscordPresence::Shutdown();
         ShutdownProcessTranscript();
         return 1;
@@ -1578,6 +1584,7 @@ int RuntimeMain(int argc, char** argv) {
         Wiimote::Shutdown();
         GxWorker::Stop();
         aurora_shutdown();
+        VoiceChat::Shutdown();
         DiscordPresence::Shutdown();
         ShutdownProcessTranscript();
         return 1;
