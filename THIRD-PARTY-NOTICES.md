@@ -94,6 +94,17 @@ vendored in `runtime/third_party/toml11`.
 Source: <https://github.com/ToruNiina/toml11/tree/v4.4.0>. Full license text:
 `runtime/third_party/toml11/LICENSE`.
 
+### Opus 1.5.2 - BSD-3-Clause
+
+Copyright (c) 2001-2023 Xiph.Org, Skype Limited, Octasic, Jean-Marc Valin, Timothy B. Terriberry,
+CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo, Mozilla, Amazon.
+Voice chat encodes and decodes speech with libopus. The portable float encoder and decoder from the
+1.5.2 release are vendored in `runtime/third_party/opus`; SIMD variants and the optional `dnn/`
+tree are not included.
+Source: <https://opus-codec.org/>, release tarball
+<https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz>. Full license text:
+`runtime/third_party/opus/COPYING`.
+
 ### YamlDotNet - MIT
 
 Copyright (c) Antoine Aubry and contributors.
