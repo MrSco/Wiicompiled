@@ -136,6 +136,7 @@ public:
     }
 
     void SetPushToTalkHeld(bool held) { m_pushToTalkHeld = held; }
+    void SetFrameSink(FrameSink sink) { m_sink = sink; }
 
     void SetMicTest(bool enabled) {
         m_micTest = enabled;
@@ -320,6 +321,9 @@ private:
             return;
         }
         const uint16_t seq = m_sequence++;
+        if (const FrameSink sink = m_sink.load()) {
+            sink(seq, packet.data(), static_cast<size_t>(size));
+        }
         if (m_micTest) {
             DeliverLocked(kLoopbackSpeaker, seq, packet.data(), static_cast<size_t>(size));
         }
@@ -405,6 +409,7 @@ private:
     std::atomic<bool> m_stop{false};
     std::atomic<bool> m_pushToTalkHeld{false};
     std::atomic<bool> m_micTest{false};
+    std::atomic<FrameSink> m_sink{nullptr};
     std::atomic<bool> m_transmitting{false};
     std::atomic<float> m_levelDb{Voice::kSilenceDb};
     std::atomic<MicState> m_micState{MicState::Off};
@@ -476,6 +481,10 @@ float InputLevelDb() {
 
 bool Transmitting() {
     return Engine::Instance().Transmitting();
+}
+
+void SetFrameSink(FrameSink sink) {
+    Engine::Instance().SetFrameSink(sink);
 }
 
 void DeliverFrame(SpeakerId speaker, uint16_t seq, const uint8_t* data, size_t size) {

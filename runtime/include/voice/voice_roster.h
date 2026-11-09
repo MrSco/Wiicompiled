@@ -30,6 +30,7 @@ struct RoomSnapshot {
     bool online = false;           // connected to a room
     bool inRace = false;           // a race or battle is running
     bool teamMode = false;
+    uint16_t localGamePort = 0;    // host order; this console's GT2 socket port, 0 if unknown
     std::vector<RoomMember> members;
 
     const RoomMember* Local() const {
@@ -42,14 +43,19 @@ struct RoomSnapshot {
     }
 };
 
-// Remote speakers are keyed by the public game endpoint the room uses to reach
-// that console; the network transport delivers frames under the same id.
+// Remote speakers are keyed by profile id, which is unique per console and
+// stays the same while the game's view of their address settles. Until the
+// profile is known, the game endpoint stands in. The network transport
+// delivers frames under the same id.
 inline uint64_t SpeakerIdFor(uint32_t publicIpNetworkOrder, uint16_t publicPortNetworkOrder) {
     return (static_cast<uint64_t>(publicIpNetworkOrder) << 16) | publicPortNetworkOrder;
 }
 
+inline constexpr uint64_t kProfileSpeakerTag = uint64_t{1} << 63;
+
 inline uint64_t SpeakerIdFor(const RoomMember& member) {
-    return SpeakerIdFor(member.publicIp, member.publicPort);
+    return member.profileId != 0 ? (kProfileSpeakerTag | member.profileId)
+                                 : SpeakerIdFor(member.publicIp, member.publicPort);
 }
 
 // Mute is remembered by profile id across sessions; per-player volume is kept

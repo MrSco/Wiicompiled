@@ -19,6 +19,9 @@ const Voice::RoomSnapshot& Room();
 bool Muted(const Voice::RoomMember& member);
 void SetMuted(const Voice::RoomMember& member, bool muted);  // persisted by profile id
 float Volume(const Voice::RoomMember& member);
+// True when this member's voice chat is connected (for yourself: enabled).
+// Members without it play normally; they just are not heard.
+bool HasVoiceChat(const Voice::RoomMember& member);
 void SetVolume(const Voice::RoomMember& member, float volume);  // this session only
 
 }  // namespace VoiceGame

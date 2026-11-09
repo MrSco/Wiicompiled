@@ -162,11 +162,20 @@ void DrawPlayers() {
         std::string label = member.name.empty() ? "Player " + std::to_string(member.aid + 1) : member.name;
         if (member.local) label += " (you)";
         else if (member.friendOfMine) label += " (friend)";
+        const bool hasVoice = VoiceGame::HasVoiceChat(member);
         ImGui::AlignTextToFramePadding();
         if (room.teamMode && member.team >= 0) {
             ImGui::TextColored(TeamColor(member.team), "%s", label.c_str());
         } else {
             ImGui::TextUnformatted(label.c_str());
+        }
+        if (!member.local && !hasVoice) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("no voice chat");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("This player has no voice chat (or it could not connect).\n"
+                                  "They play normally; you just cannot hear each other.");
+            }
         }
 
         if (!member.local) {

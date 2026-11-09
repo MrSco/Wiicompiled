@@ -5,6 +5,7 @@
 #include "voice_config.h"
 #include "runtime_log.h"
 #include "voice_chat.h"
+#include "voice/voice_network.h"
 #include "voice/voice_proximity.h"
 
 #include <algorithm>
@@ -149,6 +150,12 @@ void ReadDwcNodes(Voice::RoomSnapshot& room) {
         if (const uint32_t profileId = Memory::Read32(node); profileId != 0) {
             member->profileId = profileId;
         }
+        if (member->local) {
+            // DWC keeps this console's own node too; its local port is the port
+            // the game's GT2 socket is bound to, which the voice socket follows.
+            room.localGamePort = Memory::Read16(node + 0x0E);
+            continue;
+        }
         // The GT2 address is the one the game's peer socket talks to; fall
         // back to the public address before the GT2 connection exists.
         uint32_t ip = Memory::Read32(node + 0x10);
@@ -247,12 +254,51 @@ Voice::RoomSnapshot CaptureRoom() {
     return room;
 }
 
+// The voice link lives as long as the process; it is open while voice chat is
+// on and the game is in a room, and closed otherwise.
+Voice::Link& GetLink() {
+    static Voice::Link link([](uint64_t speakerId, uint16_t sequence, const uint8_t* data, size_t size) {
+        VoiceChat::DeliverFrame(speakerId, sequence, data, size);
+    });
+    return link;
+}
+
+void SendFrame(uint16_t sequence, const uint8_t* data, size_t size) {
+    GetLink().SendVoice(sequence, data, size);
+}
+
 struct State {
     Voice::RoomSnapshot room;
     Voice::PlayerPreferences preferences;
     bool preferencesLoaded = false;
     size_t loggedMemberCount = 0;
+    uint16_t linkGamePort = 0;  // game port the open link was bound for
 };
+
+void UpdateLink(State& state) {
+    Voice::Link& link = GetLink();
+    const Voice::RoomSnapshot& room = state.room;
+    if (!room.online) {
+        if (link.IsOpen()) {
+            link.Close();
+        }
+        return;
+    }
+    // A new GT2 socket (a new room) means a new port to follow.
+    if (!link.IsOpen() || state.linkGamePort != room.localGamePort) {
+        state.linkGamePort = room.localGamePort;
+        link.Open(room.localGamePort);
+        VoiceChat::SetFrameSink(&SendFrame);
+    }
+    std::vector<Voice::LinkPeer> peers;
+    for (const Voice::RoomMember& member : room.members) {
+        if (!member.local && member.publicIp != 0) {
+            peers.push_back({Voice::SpeakerIdFor(member), member.profileId, member.publicIp, member.publicPort});
+        }
+    }
+    const Voice::RoomMember* self = room.Local();
+    link.SetRoom(self ? self->profileId : 0, peers);
+}
 
 State& GetState() {
     static State state;
@@ -430,6 +476,7 @@ void Update() {
     State& state = GetState();
     if (!VoiceChat::CurrentSettings().enabled) {
         state.room = {};
+        UpdateLink(state);
         return;
     }
     if (!state.preferencesLoaded) {
@@ -441,7 +488,12 @@ void Update() {
         state.loggedMemberCount = state.room.members.size();
         RT_LOGF(RT_TAG_AUDIO, "voice chat: room has %zu member(s)\n", state.loggedMemberCount);
     }
+    UpdateLink(state);
     ApplyMix(state);
+}
+
+bool HasVoiceChat(const Voice::RoomMember& member) {
+    return member.local ? VoiceChat::CurrentSettings().enabled : GetLink().Reached(Voice::SpeakerIdFor(member));
 }
 
 const Voice::RoomSnapshot& Room() {

@@ -59,6 +59,11 @@ std::vector<std::string> InputDeviceNames();
 // within a session.
 using SpeakerId = uint64_t;
 
+// Where encoded microphone frames go while transmitting (the network link).
+// Called on the engine's worker thread; null stops sending.
+using FrameSink = void (*)(uint16_t seq, const uint8_t* data, size_t size);
+void SetFrameSink(FrameSink sink);
+
 // Queues one received Opus frame for playout.
 void DeliverFrame(SpeakerId speaker, uint16_t seq, const uint8_t* data, size_t size);
 void RemoveSpeaker(SpeakerId speaker);

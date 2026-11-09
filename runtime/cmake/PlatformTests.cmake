@@ -91,6 +91,18 @@ target_include_directories(mkw_voice_config_tests PRIVATE
 target_compile_features(mkw_voice_config_tests PRIVATE cxx_std_20)
 add_test(NAME mkw_voice_config_tests COMMAND mkw_voice_config_tests)
 
+add_executable(mkw_voice_network_tests
+    "${MKW_TEST_RUNTIME_DIR}/tests/voice_network_tests.cpp"
+    "${MKW_TEST_RUNTIME_DIR}/src/voice/voice_network.cpp")
+target_include_directories(mkw_voice_network_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
+target_compile_features(mkw_voice_network_tests PRIVATE cxx_std_17)
+find_package(Threads REQUIRED)
+target_link_libraries(mkw_voice_network_tests PRIVATE Threads::Threads)
+if(WIN32)
+    target_link_libraries(mkw_voice_network_tests PRIVATE ws2_32)
+endif()
+add_test(NAME mkw_voice_network_tests COMMAND mkw_voice_network_tests)
+
 add_executable(mkw_voice_proximity_tests "${MKW_TEST_RUNTIME_DIR}/tests/voice_proximity_tests.cpp")
 target_include_directories(mkw_voice_proximity_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
 target_compile_features(mkw_voice_proximity_tests PRIVATE cxx_std_17)
