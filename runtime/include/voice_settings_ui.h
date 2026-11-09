@@ -9,7 +9,8 @@ namespace VoiceSettingsUi {
 
 // The "Voice chat" menu in the top bar. Call between BeginMainMenuBar/EndMainMenuBar.
 void DrawMenu();
-// Once per presented frame: things drawn outside the menu (the talking indicator).
+// Once per presented frame, on the guest thread: refreshes the room from game
+// memory and draws things outside the menu (the talking indicator).
 void DrawOverlays();
 // Every SDL event: push-to-talk and the push-to-talk key capture. While another
 // rebind prompt is open, key presses are left to it.

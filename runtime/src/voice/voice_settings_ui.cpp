@@ -2,6 +2,7 @@
 
 #include "voice_chat.h"
 #include "voice_config.h"
+#include "voice_game.h"
 
 #include <imgui.h>
 #include <SDL3/SDL_events.h>
@@ -95,6 +96,70 @@ void DrawLevelMeter(const VoiceChat::Settings& settings) {
     }
 }
 
+ImVec4 TeamColor(int8_t team) {
+    // Team VS/battle: 0 = red, 1 = blue, matching the game's own colours.
+    return team == 0 ? ImVec4(1.0f, 0.45f, 0.45f, 1.0f) : ImVec4(0.45f, 0.65f, 1.0f, 1.0f);
+}
+
+void DrawPlayers() {
+    ImGui::SeparatorText("Players in room");
+    const Voice::RoomSnapshot& room = VoiceGame::Room();
+    if (!room.online) {
+        ImGui::TextDisabled("Not in an online room.");
+        return;
+    }
+    const float lineHeight = ImGui::GetTextLineHeight();
+    for (const Voice::RoomMember& member : room.members) {
+        ImGui::PushID(member.aid);
+        // Talking dot. Remote players light up from their decoded audio, you
+        // from your own transmit state.
+        const bool talking = member.local ? VoiceChat::Transmitting()
+                                          : VoiceChat::SpeakerTalking(Voice::SpeakerIdFor(member));
+        const ImVec2 cursor = ImGui::GetCursorScreenPos();
+        const float radius = lineHeight * 0.3f;
+        ImGui::GetWindowDrawList()->AddCircleFilled(
+            ImVec2(cursor.x + radius, cursor.y + lineHeight * 0.5f + ImGui::GetStyle().FramePadding.y), radius,
+            talking ? IM_COL32(80, 220, 110, 255) : IM_COL32(90, 90, 100, 255));
+        ImGui::Dummy(ImVec2(radius * 2.0f, ImGui::GetFrameHeight()));
+        ImGui::SameLine();
+
+        std::string label = member.name.empty() ? "Player " + std::to_string(member.aid + 1) : member.name;
+        if (member.local) label += " (you)";
+        else if (member.friendOfMine) label += " (friend)";
+        ImGui::AlignTextToFramePadding();
+        if (room.teamMode && member.team >= 0) {
+            ImGui::TextColored(TeamColor(member.team), "%s", label.c_str());
+        } else {
+            ImGui::TextUnformatted(label.c_str());
+        }
+
+        if (!member.local) {
+            ImGui::SameLine(200.0f);
+            const bool identified = member.profileId != 0;
+            ImGui::BeginDisabled(!identified);
+            bool muted = VoiceGame::Muted(member);
+            if (ImGui::Checkbox("Mute", &muted)) {
+                VoiceGame::SetMuted(member, muted);
+            }
+            ImGui::EndDisabled();
+            if (!identified && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("This player's profile has not been received yet.");
+            }
+            ImGui::SameLine();
+            int percent = static_cast<int>(std::lround(VoiceGame::Volume(member) * 100.0f));
+            ImGui::SetNextItemWidth(120.0f);
+            // Volume is remembered per profile, so it needs the profile id too.
+            ImGui::BeginDisabled(muted || !identified);
+            if (ImGui::SliderInt("##volume", &percent, 0, 200, "%d%%")) {
+                VoiceGame::SetVolume(member, static_cast<float>(percent) / 100.0f);
+            }
+            ImGui::EndDisabled();
+        }
+        ImGui::PopID();
+    }
+}
+
+
 void DrawSettings() {
     VoiceChat::Settings settings = VoiceChat::CurrentSettings();
     bool changed = false;
@@ -184,6 +249,8 @@ void DrawSettings() {
         changed = true;
     }
 
+    DrawPlayers();
+
     ImGui::EndDisabled();
 
     if (changed) {
@@ -231,6 +298,9 @@ void DrawMenu() {
 }
 
 void DrawOverlays() {
+    // This runs on the guest thread at the same point every frame, so it is
+    // where voice chat reads the room from game memory.
+    VoiceGame::Update();
     DrawTalkingIndicator();
 }
 

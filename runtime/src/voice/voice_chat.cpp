@@ -9,6 +9,7 @@
 #include <SDL3/SDL_audio.h>
 #include <SDL3/SDL_init.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -30,11 +31,18 @@ constexpr auto kWorkerTick = std::chrono::milliseconds(5);
 // The mic test's own voice is mixed as a speaker with this id.
 constexpr uint64_t kLoopbackSpeaker = ~uint64_t{0};
 
+// Decoded audio above this counts as speech for the talking indicator.
+constexpr float kSpeechFloorDb = -50.0f;
+// How long a speaker still shows as talking after their last speech frame.
+constexpr int kTalkingHoldFrames = 15;  // 300 ms
+
 struct Speaker {
     Voice::JitterBuffer jitter;
     Voice::Decoder decoder;
     bool decoderReady = false;
-    float gain = 1.0f;
+    float gain = 1.0f;         // target set by SetSpeakerGain
+    float appliedGain = 1.0f;  // gain at the end of the last mixed frame
+    int framesSinceSpeech = kTalkingHoldFrames;
 };
 
 class Engine {
@@ -110,6 +118,7 @@ public:
             m_playback = nullptr;
         }
         m_speakers.clear();
+        m_pendingGains.clear();
         m_gate.Reset();
         m_transmitting = false;
         m_levelDb = Voice::kSilenceDb;
@@ -138,6 +147,38 @@ public:
     }
     float InputLevelDb() const { return m_levelDb; }
     bool Transmitting() const { return m_transmitting; }
+
+    void DeliverFrame(SpeakerId speaker, uint16_t seq, const uint8_t* data, size_t size) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_running && speaker != kLoopbackSpeaker) {
+            DeliverLocked(speaker, seq, data, size);
+        }
+    }
+
+    void RemoveSpeaker(SpeakerId speaker) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_speakers.erase(speaker);
+    }
+
+    void SetSpeakerGain(SpeakerId speaker, float gain) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_running) {
+            return;
+        }
+        // Only an existing speaker is updated: a gain alone must not create one.
+        const auto it = m_speakers.find(speaker);
+        if (it != m_speakers.end()) {
+            it->second.gain = std::clamp(gain, 0.0f, 2.0f);
+        } else {
+            m_pendingGains[speaker] = std::clamp(gain, 0.0f, 2.0f);
+        }
+    }
+
+    bool SpeakerTalking(SpeakerId speaker) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto it = m_speakers.find(speaker);
+        return it != m_speakers.end() && it->second.framesSinceSpeech < kTalkingHoldFrames;
+    }
 
 private:
     Engine() = default;
@@ -276,7 +317,16 @@ private:
     }
 
     void DeliverLocked(uint64_t speakerId, uint16_t seq, const uint8_t* data, size_t size) {
-        Speaker& speaker = m_speakers[speakerId];
+        const auto [it, inserted] = m_speakers.try_emplace(speakerId);
+        Speaker& speaker = it->second;
+        if (inserted) {
+            // A gain set before the first frame (a muted player) applies from
+            // the very first sample.
+            if (const auto pending = m_pendingGains.find(speakerId); pending != m_pendingGains.end()) {
+                speaker.gain = speaker.appliedGain = pending->second;
+                m_pendingGains.erase(pending);
+            }
+        }
         if (!speaker.decoderReady) {
             speaker.decoderReady = speaker.decoder.Init();
         }
@@ -303,6 +353,8 @@ private:
             // Buffers keep draining while muted so unmuting does not replay old audio.
             const Voice::JitterBuffer::Output out = speaker.jitter.Pop();
             if (!speaker.decoderReady || out.kind == Voice::JitterBuffer::Kind::Silent) {
+                speaker.framesSinceSpeech = std::min(speaker.framesSinceSpeech + 1, kTalkingHoldFrames);
+                speaker.appliedGain = speaker.gain;
                 continue;
             }
             if (out.kind == Voice::JitterBuffer::Kind::Frame) {
@@ -312,10 +364,19 @@ private:
             } else {
                 speaker.decoder.Conceal(voice.data());
             }
-            const float gain = volume * speaker.gain;
-            for (int i = 0; i < Voice::kFrameSamples; ++i) {
-                mix[i] += voice[i] * gain;
+            if (Voice::LevelDb(voice.data(), voice.size()) >= kSpeechFloorDb) {
+                speaker.framesSinceSpeech = 0;
+            } else {
+                speaker.framesSinceSpeech = std::min(speaker.framesSinceSpeech + 1, kTalkingHoldFrames);
             }
+            // Ramp from last frame's gain to the new one across this frame.
+            const float from = volume * speaker.appliedGain;
+            const float to = volume * speaker.gain;
+            const float step = (to - from) / static_cast<float>(Voice::kFrameSamples);
+            for (int i = 0; i < Voice::kFrameSamples; ++i) {
+                mix[i] += voice[i] * (from + step * static_cast<float>(i + 1));
+            }
+            speaker.appliedGain = speaker.gain;
         }
         for (int i = 0; i < Voice::kFrameSamples; ++i) {
             mix[i] = Voice::SoftLimit(mix[i]);
@@ -341,6 +402,7 @@ private:
     Voice::ActivationGate m_gate;
     uint16_t m_sequence = 0;
     std::map<uint64_t, Speaker> m_speakers;
+    std::map<uint64_t, float> m_pendingGains;
 };
 
 Settings SettingsFromConfig() {
@@ -399,6 +461,22 @@ float InputLevelDb() {
 
 bool Transmitting() {
     return Engine::Instance().Transmitting();
+}
+
+void DeliverFrame(SpeakerId speaker, uint16_t seq, const uint8_t* data, size_t size) {
+    Engine::Instance().DeliverFrame(speaker, seq, data, size);
+}
+
+void RemoveSpeaker(SpeakerId speaker) {
+    Engine::Instance().RemoveSpeaker(speaker);
+}
+
+void SetSpeakerGain(SpeakerId speaker, float gain) {
+    Engine::Instance().SetSpeakerGain(speaker, gain);
+}
+
+bool SpeakerTalking(SpeakerId speaker) {
+    return Engine::Instance().SpeakerTalking(speaker);
 }
 
 std::vector<std::string> InputDeviceNames() {

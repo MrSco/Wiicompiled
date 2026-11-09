@@ -55,12 +55,19 @@ void TestMissingSectionAndInvalidFile() {
     Check(!broken.enabled, "unparseable file: all defaults");
 }
 
+void TestMutedPlayers() {
+    const auto values = Parse("[voice]\nmuted_players = [12345, 0, -4, 4294967295, 99]\n");
+    Check(values.mutedPlayers == std::vector<uint32_t>({12345u, 4294967295u, 99u}),
+          "muted players loaded; zero, negative and out-of-range ids dropped");
+}
+
 }  // namespace
 
 int main() {
     TestAllSettings();
     TestRejectsBadValues();
     TestMissingSectionAndInvalidFile();
+    TestMutedPlayers();
     if (g_failures != 0) {
         std::printf("%d failure(s)\n", g_failures);
         return 1;

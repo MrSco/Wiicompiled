@@ -14,6 +14,7 @@
 //   input_volume = 1.0               # 0 to 2
 //   volume = 1.0                     # 0 to 1
 //   mute_all = false
+//   muted_players = []               # profile ids, remembered across sessions
 
 #include "runtime_config.h"
 
@@ -23,6 +24,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace VoiceConfig {
 
@@ -35,6 +37,7 @@ struct Values {
     std::optional<float> inputVolume;
     std::optional<float> volume;
     std::optional<bool> muteAll;
+    std::vector<uint32_t> mutedPlayers;
 };
 
 inline constexpr const char* kSection = "voice";
@@ -60,6 +63,13 @@ inline Values ParseDocument(const toml::value& document) {
     values.inputVolume = inRange(FindConfigFloat(document, kSection, "input_volume"), 0.0f, 2.0f);
     values.volume = inRange(FindConfigFloat(document, kSection, "volume"), 0.0f, 1.0f);
     values.muteAll = FindConfigValue<bool>(document, kSection, "mute_all");
+    if (const auto muted = FindConfigValue<std::vector<int64_t>>(document, kSection, "muted_players")) {
+        for (const int64_t id : *muted) {
+            if (id > 0 && id <= static_cast<int64_t>(UINT32_MAX)) {
+                values.mutedPlayers.push_back(static_cast<uint32_t>(id));
+            }
+        }
+    }
     return values;
 }
 
@@ -98,6 +108,7 @@ inline std::string InputDevice() { return Get().inputDevice.value_or(std::string
 inline float InputVolume() { return Get().inputVolume.value_or(1.0f); }
 inline float Volume() { return Get().volume.value_or(1.0f); }
 inline bool MuteAll() { return Get().muteAll.value_or(false); }
+inline const std::vector<uint32_t>& MutedPlayers() { return Get().mutedPlayers; }
 
 inline bool SetEnabled(bool value) {
     Mutable().enabled = value;
@@ -141,6 +152,15 @@ inline bool SetVolume(float value) {
 inline bool SetMuteAll(bool value) {
     Mutable().muteAll = value;
     return RuntimeConfigFile::WriteSetting(kSection, "mute_all", value ? "true" : "false");
+}
+
+inline bool SetMutedPlayers(const std::vector<uint32_t>& profileIds) {
+    Mutable().mutedPlayers = profileIds;
+    std::string list = "[";
+    for (size_t i = 0; i < profileIds.size(); ++i) {
+        list += (i ? ", " : "") + std::to_string(profileIds[i]);
+    }
+    return RuntimeConfigFile::WriteSetting(kSection, "muted_players", list + "]");
 }
 
 }  // namespace VoiceConfig

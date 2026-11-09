@@ -4,6 +4,7 @@
 #include "voice/voice_codec.h"
 #include "voice/voice_dsp.h"
 #include "voice/voice_jitter_buffer.h"
+#include "voice/voice_roster.h"
 
 #include <algorithm>
 #include <array>
@@ -247,6 +248,46 @@ void TestSoftLimit() {
     Check(Voice::SoftLimit(0.9f) < Voice::SoftLimit(1.2f), "monotonic");
 }
 
+
+// --- roster ----------------------------------------------------------------------
+
+void TestUtf16Names() {
+    const uint16_t ascii[] = {'M', 'a', 'r', 'i', 'o', 0, 'x'};
+    Check(Voice::Utf16ToUtf8(ascii, 7) == "Mario", "stops at NUL");
+    const uint16_t full[] = {'A', 'B', 'C'};
+    Check(Voice::Utf16ToUtf8(full, 3) == "ABC", "full-length name without NUL");
+    const uint16_t accented[] = {0x00E9, 0x3042, 0};  // e-acute, hiragana a
+    Check(Voice::Utf16ToUtf8(accented, 3) == "\xC3\xA9\xE3\x81\x82", "two- and three-byte UTF-8");
+    const uint16_t pair[] = {0xD83C, 0xDFC1, 0};  // chequered flag
+    Check(Voice::Utf16ToUtf8(pair, 3) == "\xF0\x9F\x8F\x81", "surrogate pair");
+    const uint16_t lone[] = {0xD83C, 'x', 0};
+    Check(Voice::Utf16ToUtf8(lone, 3) == "\xEF\xBF\xBD" "x", "unpaired surrogate replaced");
+}
+
+void TestPlayerPreferences() {
+    Voice::PlayerPreferences prefs;
+    prefs.LoadMuted({7, 0, 9});
+    Check(prefs.Muted(7) && prefs.Muted(9) && !prefs.Muted(0), "loaded mutes, profile 0 ignored");
+    Check(prefs.Gain(7) == 0.0f, "muted player is silent");
+    Check(prefs.Gain(8) == 1.0f, "others default to full volume");
+    prefs.SetVolume(8, 0.5f);
+    Check(prefs.Gain(8) == 0.5f, "per-player volume");
+    Check(prefs.SetMuted(8, true) && prefs.Gain(8) == 0.0f, "mute overrides volume");
+    Check(prefs.SetMuted(8, false) && prefs.Gain(8) == 0.5f, "unmute restores volume");
+    Check(!prefs.SetMuted(8, false), "no change reported when already unmuted");
+    Check(!prefs.SetMuted(0, true), "unknown profile cannot be muted");
+    Check(prefs.MutedList() == std::vector<uint32_t>({7, 9}), "persisted list");
+}
+
+void TestSpeakerIds() {
+    Voice::RoomMember a;
+    a.publicIp = 0x0100007F;
+    a.publicPort = 0x3930;
+    Voice::RoomMember b = a;
+    b.publicPort = 0x3931;
+    Check(Voice::SpeakerIdFor(a) != Voice::SpeakerIdFor(b), "same IP, different port: different speakers");
+    Check(Voice::SpeakerIdFor(a) == Voice::SpeakerIdFor(0x0100007F, 0x3930), "stable id");
+}
 }  // namespace
 
 int main() {
@@ -263,6 +304,9 @@ int main() {
     TestJitterLongGapStops();
     TestLevelAndGate();
     TestSoftLimit();
+    TestUtf16Names();
+    TestPlayerPreferences();
+    TestSpeakerIds();
     if (g_failures != 0) {
         std::printf("%d failure(s)\n", g_failures);
         return 1;
