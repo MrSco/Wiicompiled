@@ -24,9 +24,12 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 constexpr int kFrameBytes = Voice::kFrameSamples * static_cast<int>(sizeof(float));
+// Voices are mixed to stereo so proximity chat can place them left or right.
+constexpr int kOutputChannels = 2;
+constexpr int kOutputFrameBytes = kFrameBytes * kOutputChannels;
 // Output is topped up to this much queued audio. Two frames (40 ms) is enough
 // to ride out worker scheduling hiccups without adding noticeable latency.
-constexpr int kPlaybackQueueBytes = 2 * kFrameBytes;
+constexpr int kPlaybackQueueBytes = 2 * kOutputFrameBytes;
 constexpr auto kWorkerTick = std::chrono::milliseconds(5);
 // The mic test's own voice is mixed as a speaker with this id.
 constexpr uint64_t kLoopbackSpeaker = ~uint64_t{0};
@@ -40,8 +43,11 @@ struct Speaker {
     Voice::JitterBuffer jitter;
     Voice::Decoder decoder;
     bool decoderReady = false;
-    float gain = 1.0f;         // target set by SetSpeakerGain
-    float appliedGain = 1.0f;  // gain at the end of the last mixed frame
+    // Targets set by SetSpeakerGain, and the gains at the end of the last mixed frame.
+    float gainLeft = 1.0f;
+    float gainRight = 1.0f;
+    float appliedLeft = 1.0f;
+    float appliedRight = 1.0f;
     int framesSinceSpeech = kTalkingHoldFrames;
 };
 
@@ -160,17 +166,20 @@ public:
         m_speakers.erase(speaker);
     }
 
-    void SetSpeakerGain(SpeakerId speaker, float gain) {
+    void SetSpeakerGain(SpeakerId speaker, float left, float right) {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (!m_running) {
             return;
         }
+        left = std::clamp(left, 0.0f, 2.0f);
+        right = std::clamp(right, 0.0f, 2.0f);
         // Only an existing speaker is updated: a gain alone must not create one.
         const auto it = m_speakers.find(speaker);
         if (it != m_speakers.end()) {
-            it->second.gain = std::clamp(gain, 0.0f, 2.0f);
+            it->second.gainLeft = left;
+            it->second.gainRight = right;
         } else {
-            m_pendingGains[speaker] = std::clamp(gain, 0.0f, 2.0f);
+            m_pendingGains[speaker] = {left, right};
         }
     }
 
@@ -191,10 +200,10 @@ private:
         }
     }
 
-    static SDL_AudioSpec VoiceSpec() {
+    static SDL_AudioSpec VoiceSpec(int channels) {
         SDL_AudioSpec spec{};
         spec.format = SDL_AUDIO_F32;
-        spec.channels = 1;
+        spec.channels = channels;
         spec.freq = Voice::kSampleRate;
         return spec;
     }
@@ -224,7 +233,7 @@ private:
     }
 
     void OpenCaptureLocked() {
-        const SDL_AudioSpec spec = VoiceSpec();
+        const SDL_AudioSpec spec = VoiceSpec(1);
         m_capture = SDL_OpenAudioDeviceStream(FindInputDeviceLocked(), &spec, nullptr, nullptr);
         if (!m_capture) {
             SetUnavailableLocked(std::string("the microphone could not be opened: ") + SDL_GetError());
@@ -250,7 +259,7 @@ private:
     }
 
     void OpenPlaybackLocked() {
-        const SDL_AudioSpec spec = VoiceSpec();
+        const SDL_AudioSpec spec = VoiceSpec(kOutputChannels);
         m_playback = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
         if (!m_playback || !SDL_ResumeAudioStreamDevice(m_playback)) {
             RT_LOGF(RT_TAG_AUDIO, "voice chat: playback could not be opened: %s\n", SDL_GetError());
@@ -323,7 +332,8 @@ private:
             // A gain set before the first frame (a muted player) applies from
             // the very first sample.
             if (const auto pending = m_pendingGains.find(speakerId); pending != m_pendingGains.end()) {
-                speaker.gain = speaker.appliedGain = pending->second;
+                speaker.gainLeft = speaker.appliedLeft = pending->second.first;
+                speaker.gainRight = speaker.appliedRight = pending->second.second;
                 m_pendingGains.erase(pending);
             }
         }
@@ -338,9 +348,9 @@ private:
             return;
         }
         while (SDL_GetAudioStreamQueued(m_playback) < kPlaybackQueueBytes) {
-            std::array<float, Voice::kFrameSamples> mix{};
+            std::array<float, Voice::kFrameSamples * kOutputChannels> mix{};
             MixFrameLocked(mix.data());
-            if (!SDL_PutAudioStreamData(m_playback, mix.data(), kFrameBytes)) {
+            if (!SDL_PutAudioStreamData(m_playback, mix.data(), kOutputFrameBytes)) {
                 break;
             }
         }
@@ -354,7 +364,8 @@ private:
             const Voice::JitterBuffer::Output out = speaker.jitter.Pop();
             if (!speaker.decoderReady || out.kind == Voice::JitterBuffer::Kind::Silent) {
                 speaker.framesSinceSpeech = std::min(speaker.framesSinceSpeech + 1, kTalkingHoldFrames);
-                speaker.appliedGain = speaker.gain;
+                speaker.appliedLeft = speaker.gainLeft;
+                speaker.appliedRight = speaker.gainRight;
                 continue;
             }
             if (out.kind == Voice::JitterBuffer::Kind::Frame) {
@@ -369,16 +380,20 @@ private:
             } else {
                 speaker.framesSinceSpeech = std::min(speaker.framesSinceSpeech + 1, kTalkingHoldFrames);
             }
-            // Ramp from last frame's gain to the new one across this frame.
-            const float from = volume * speaker.appliedGain;
-            const float to = volume * speaker.gain;
-            const float step = (to - from) / static_cast<float>(Voice::kFrameSamples);
+            // Ramp each channel from last frame's gain to the new one across this frame.
+            const float fromLeft = volume * speaker.appliedLeft;
+            const float fromRight = volume * speaker.appliedRight;
+            const float stepLeft = (volume * speaker.gainLeft - fromLeft) / static_cast<float>(Voice::kFrameSamples);
+            const float stepRight = (volume * speaker.gainRight - fromRight) / static_cast<float>(Voice::kFrameSamples);
             for (int i = 0; i < Voice::kFrameSamples; ++i) {
-                mix[i] += voice[i] * (from + step * static_cast<float>(i + 1));
+                const float t = static_cast<float>(i + 1);
+                mix[2 * i] += voice[i] * (fromLeft + stepLeft * t);
+                mix[2 * i + 1] += voice[i] * (fromRight + stepRight * t);
             }
-            speaker.appliedGain = speaker.gain;
+            speaker.appliedLeft = speaker.gainLeft;
+            speaker.appliedRight = speaker.gainRight;
         }
-        for (int i = 0; i < Voice::kFrameSamples; ++i) {
+        for (int i = 0; i < Voice::kFrameSamples * kOutputChannels; ++i) {
             mix[i] = Voice::SoftLimit(mix[i]);
         }
     }
@@ -402,7 +417,7 @@ private:
     Voice::ActivationGate m_gate;
     uint16_t m_sequence = 0;
     std::map<uint64_t, Speaker> m_speakers;
-    std::map<uint64_t, float> m_pendingGains;
+    std::map<uint64_t, std::pair<float, float>> m_pendingGains;
 };
 
 Settings SettingsFromConfig() {
@@ -471,8 +486,8 @@ void RemoveSpeaker(SpeakerId speaker) {
     Engine::Instance().RemoveSpeaker(speaker);
 }
 
-void SetSpeakerGain(SpeakerId speaker, float gain) {
-    Engine::Instance().SetSpeakerGain(speaker, gain);
+void SetSpeakerGain(SpeakerId speaker, float left, float right) {
+    Engine::Instance().SetSpeakerGain(speaker, left, right);
 }
 
 bool SpeakerTalking(SpeakerId speaker) {

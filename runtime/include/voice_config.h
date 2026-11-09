@@ -15,6 +15,12 @@
 //   volume = 1.0                     # 0 to 1
 //   mute_all = false
 //   muted_players = []               # profile ids, remembered across sessions
+//   # Proximity chat during races: opponents fade with distance and are placed
+//   # left/right. Friends, teammates and your own console are always full volume.
+//   proximity = true
+//   proximity_range_m = 120.0        # metres until opponents fade out (40-400)
+//   proximity_min_volume = 0.0       # volume kept beyond the range (0-0.5)
+//   proximity_stereo = true
 
 #include "runtime_config.h"
 
@@ -38,6 +44,10 @@ struct Values {
     std::optional<float> volume;
     std::optional<bool> muteAll;
     std::vector<uint32_t> mutedPlayers;
+    std::optional<bool> proximity;
+    std::optional<float> proximityRangeMeters;
+    std::optional<float> proximityMinimumVolume;
+    std::optional<bool> proximityStereo;
 };
 
 inline constexpr const char* kSection = "voice";
@@ -63,6 +73,11 @@ inline Values ParseDocument(const toml::value& document) {
     values.inputVolume = inRange(FindConfigFloat(document, kSection, "input_volume"), 0.0f, 2.0f);
     values.volume = inRange(FindConfigFloat(document, kSection, "volume"), 0.0f, 1.0f);
     values.muteAll = FindConfigValue<bool>(document, kSection, "mute_all");
+    values.proximity = FindConfigValue<bool>(document, kSection, "proximity");
+    values.proximityRangeMeters = inRange(FindConfigFloat(document, kSection, "proximity_range_m"), 40.0f, 400.0f);
+    values.proximityMinimumVolume =
+        inRange(FindConfigFloat(document, kSection, "proximity_min_volume"), 0.0f, 0.5f);
+    values.proximityStereo = FindConfigValue<bool>(document, kSection, "proximity_stereo");
     if (const auto muted = FindConfigValue<std::vector<int64_t>>(document, kSection, "muted_players")) {
         for (const int64_t id : *muted) {
             if (id > 0 && id <= static_cast<int64_t>(UINT32_MAX)) {
@@ -109,6 +124,10 @@ inline float InputVolume() { return Get().inputVolume.value_or(1.0f); }
 inline float Volume() { return Get().volume.value_or(1.0f); }
 inline bool MuteAll() { return Get().muteAll.value_or(false); }
 inline const std::vector<uint32_t>& MutedPlayers() { return Get().mutedPlayers; }
+inline bool Proximity() { return Get().proximity.value_or(true); }
+inline float ProximityRangeMeters() { return Get().proximityRangeMeters.value_or(120.0f); }
+inline float ProximityMinimumVolume() { return Get().proximityMinimumVolume.value_or(0.0f); }
+inline bool ProximityStereo() { return Get().proximityStereo.value_or(true); }
 
 inline bool SetEnabled(bool value) {
     Mutable().enabled = value;
@@ -161,6 +180,28 @@ inline bool SetMutedPlayers(const std::vector<uint32_t>& profileIds) {
         list += (i ? ", " : "") + std::to_string(profileIds[i]);
     }
     return RuntimeConfigFile::WriteSetting(kSection, "muted_players", list + "]");
+}
+
+inline bool SetProximity(bool value) {
+    Mutable().proximity = value;
+    return RuntimeConfigFile::WriteSetting(kSection, "proximity", value ? "true" : "false");
+}
+
+inline bool SetProximityRangeMeters(float value) {
+    value = std::clamp(value, 40.0f, 400.0f);
+    Mutable().proximityRangeMeters = value;
+    return RuntimeConfigFile::WriteSetting(kSection, "proximity_range_m", FormatFloat(value));
+}
+
+inline bool SetProximityMinimumVolume(float value) {
+    value = std::clamp(value, 0.0f, 0.5f);
+    Mutable().proximityMinimumVolume = value;
+    return RuntimeConfigFile::WriteSetting(kSection, "proximity_min_volume", FormatFloat(value));
+}
+
+inline bool SetProximityStereo(bool value) {
+    Mutable().proximityStereo = value;
+    return RuntimeConfigFile::WriteSetting(kSection, "proximity_stereo", value ? "true" : "false");
 }
 
 }  // namespace VoiceConfig

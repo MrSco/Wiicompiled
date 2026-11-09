@@ -61,6 +61,18 @@ void TestMutedPlayers() {
           "muted players loaded; zero, negative and out-of-range ids dropped");
 }
 
+void TestProximity() {
+    const auto values = Parse(
+        "[voice]\nproximity = false\nproximity_range_m = 200\nproximity_min_volume = 0.25\n"
+        "proximity_stereo = false\n");
+    Check(values.proximity == std::optional<bool>{false}, "proximity off");
+    Check(values.proximityRangeMeters == std::optional<float>{200.0f}, "range");
+    Check(values.proximityMinimumVolume == std::optional<float>{0.25f}, "distant volume");
+    Check(values.proximityStereo == std::optional<bool>{false}, "stereo off");
+    const auto bad = Parse("[voice]\nproximity_range_m = 5\nproximity_min_volume = 0.9\n");
+    Check(!bad.proximityRangeMeters && !bad.proximityMinimumVolume, "out of range proximity values ignored");
+}
+
 }  // namespace
 
 int main() {
@@ -68,6 +80,7 @@ int main() {
     TestRejectsBadValues();
     TestMissingSectionAndInvalidFile();
     TestMutedPlayers();
+    TestProximity();
     if (g_failures != 0) {
         std::printf("%d failure(s)\n", g_failures);
         return 1;

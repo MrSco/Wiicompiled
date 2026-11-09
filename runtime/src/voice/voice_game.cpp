@@ -5,9 +5,12 @@
 #include "voice_config.h"
 #include "runtime_log.h"
 #include "voice_chat.h"
+#include "voice/voice_proximity.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 // Game structures read here, all PAL addresses translated per region by
@@ -48,8 +51,10 @@ constexpr uint32_t kMaxPlayers = 12;
 constexpr uint32_t kFirstOnlineRaceSection = 0x68;
 constexpr uint32_t kLastOnlineRaceSection = 0x77;
 
+// Every pointer in a chain is checked against guest RAM (MEM1/MEM2 live at
+// 0x80000000 and up), so a null pointer plus a field offset is never read.
 bool Readable(uint32_t address, size_t length) {
-    return address != 0 && Memory::Contains(address, length);
+    return address >= 0x80000000u && Memory::Contains(address, length);
 }
 
 uint32_t ReadPointer(uint32_t address) {
@@ -254,12 +259,168 @@ State& GetState() {
     return state;
 }
 
+// --- Proximity -------------------------------------------------------------
+//
+//   Kart::Manager (0x809C18F8): +0x20 players (Player**), +0x24 count (u8);
+//     index = race player id. Player +0x0 -> accessor; accessor +0x08 -> body
+//     -> +0x90 physics holder -> +0x04 physics -> +0x68 position (Vec3).
+//   accessor +0x24 -> that kart's RaceCamera: +0x64 position, +0x70 target.
+
+bool ReadVec3(uint32_t address, Voice::Vec3& out) {
+    if (!Readable(address, 12)) {
+        return false;
+    }
+    out = {Memory::ReadFloat32(address), Memory::ReadFloat32(address + 4), Memory::ReadFloat32(address + 8)};
+    return std::isfinite(out.x) && std::isfinite(out.y) && std::isfinite(out.z);
+}
+
+uint32_t KartAccessor(int playerId) {
+    const uint32_t manager = ReadPointer(MKW_GADDR(809C18F8));
+    if (playerId < 0 || !Readable(manager, 0x28) ||
+        static_cast<uint32_t>(playerId) >= Memory::Read8(manager + 0x24)) {
+        return 0;
+    }
+    const uint32_t players = Memory::Read32(manager + 0x20);
+    return ReadPointer(ReadPointer(players + 4u * static_cast<uint32_t>(playerId)));
+}
+
+bool KartPosition(int playerId, Voice::Vec3& out) {
+    const uint32_t accessor = KartAccessor(playerId);
+    const uint32_t body = ReadPointer(accessor + 0x08);
+    const uint32_t physics = ReadPointer(ReadPointer(body + 0x90) + 0x04);
+    return accessor && body && ReadVec3(physics + 0x68, out);
+}
+
+// Hears from the local player's race camera, which also covers spectating and
+// finishing early. Falls back to the kart itself, without panning.
+bool LocalListener(int playerId, Voice::Listener& out) {
+    const uint32_t camera = ReadPointer(KartAccessor(playerId) + 0x24);
+    Voice::Vec3 position;
+    Voice::Vec3 target;
+    if (camera && ReadVec3(camera + 0x64, position) && ReadVec3(camera + 0x70, target)) {
+        const Voice::Vec3 forward = target - position;
+        // forward x world up (+Y) points to the camera's right.
+        out.position = position;
+        out.right = {-forward.z, 0.0f, forward.x};
+        return true;
+    }
+    if (KartPosition(playerId, out.position)) {
+        out.right = {};
+        return true;
+    }
+    return false;
+}
+
+Voice::ProximitySettings ProximityFromConfig() {
+    Voice::ProximitySettings settings;
+    settings.enabled = VoiceConfig::Proximity();
+    // World units are roughly centimetres; full volume over the first sixth.
+    settings.range = VoiceConfig::ProximityRangeMeters() * 100.0f;
+    settings.fullVolumeDistance = settings.range / 6.0f;
+    settings.minimumGain = VoiceConfig::ProximityMinimumVolume();
+    settings.stereo = VoiceConfig::ProximityStereo();
+    return settings;
+}
+
+// MKW_VOICE_PROXIMITY_DEBUG=1 logs every kart's proximity mix relative to the
+// local camera every two seconds, in any race (offline races included), so the
+// position and camera reads can be checked against what is on screen.
+bool ProximityDebugTick() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("MKW_VOICE_PROXIMITY_DEBUG");
+        return value && value[0] == '1';
+    }();
+    static uint32_t frame = 0;
+    return enabled && (frame++ % 120) == 0;
+}
+
+// Logs each hop of the kart/camera pointer chain when no listener could be
+// read, once per change of scene or kart manager.
+void LogProximityChain(int playerId) {
+    const uint32_t manager = ReadPointer(MKW_GADDR(809C18F8));
+    const uint32_t section = ReadPointer(ReadPointer(MKW_GADDR(809C1E38)));
+    const uint32_t sectionId = Readable(section, 4) ? Memory::Read32(section) : 0xFFFFFFFFu;
+    static uint64_t lastKey = ~uint64_t{0};
+    const uint64_t key = (static_cast<uint64_t>(sectionId) << 32) | manager;
+    if (key == lastKey) {
+        return;
+    }
+    lastKey = key;
+    RT_LOGF(RT_TAG_AUDIO, "voice proximity: section %#x, kart manager %08x\n", sectionId, manager);
+    const uint32_t count = Readable(manager, 0x28) ? Memory::Read8(manager + 0x24) : 0;
+    const uint32_t players = Readable(manager, 0x28) ? Memory::Read32(manager + 0x20) : 0;
+    const uint32_t accessor = KartAccessor(playerId);
+    const uint32_t body = ReadPointer(accessor + 0x08);
+    const uint32_t holder = ReadPointer(body + 0x90);
+    RT_LOGF(RT_TAG_AUDIO,
+            "voice proximity: no listener for player %d: manager %08x count %u players %08x accessor %08x "
+            "body %08x holder %08x physics %08x camera %08x\n",
+            playerId, manager, count, players, accessor, body, holder, ReadPointer(holder + 0x04),
+            ReadPointer(accessor + 0x24));
+}
+
+// Debug cross-check of the pan direction: the camera's own view matrix
+// (RaceCamera +0x4, Mtx34, row 0 = view-space x) says which side of the screen
+// a point is drawn on. Returns 0 when it cannot be read.
+int ScreenSide(int listenerPlayerId, const Voice::Vec3& point) {
+    const uint32_t camera = ReadPointer(KartAccessor(listenerPlayerId) + 0x24);
+    if (!Readable(camera + 0x4, 48)) {
+        return 0;
+    }
+    const float viewX = Memory::ReadFloat32(camera + 0x4) * point.x + Memory::ReadFloat32(camera + 0x8) * point.y +
+                        Memory::ReadFloat32(camera + 0xC) * point.z + Memory::ReadFloat32(camera + 0x10);
+    return viewX > 0.0f ? 1 : -1;
+}
+
+void LogProximityDebug(int listenerPlayerId, const Voice::Listener& listener,
+                       const Voice::ProximitySettings& settings) {
+    RT_LOGF(RT_TAG_AUDIO, "voice proximity: listener player %d at (%.0f, %.0f, %.0f) right (%.2f, %.2f)\n",
+            listenerPlayerId, listener.position.x, listener.position.y, listener.position.z, listener.right.x,
+            listener.right.z);
+    for (int playerId = 0; playerId < 12; ++playerId) {
+        Voice::Vec3 position;
+        if (playerId == listenerPlayerId || !KartPosition(playerId, position)) {
+            continue;
+        }
+        const Voice::StereoGain gain = Voice::Spatialize(listener, position, false, settings);
+        const float side = Voice::Dot(position - listener.position, listener.right);
+        const int screenSide = ScreenSide(listenerPlayerId, position);
+        const char* check = screenSide == 0 ? "unknown"
+                            : (side > 0.0f) == (screenSide > 0) ? "matches screen"
+                                                                : "OPPOSITE of screen";
+        RT_LOGF(RT_TAG_AUDIO, "voice proximity:   player %d distance %.0f -> L %.2f R %.2f (pan %s)\n", playerId,
+                Voice::Length(position - listener.position), gain.left, gain.right, check);
+    }
+}
+
 void ApplyMix(const State& state) {
-    for (const Voice::RoomMember& member : state.room.members) {
+    const Voice::RoomSnapshot& room = state.room;
+    const Voice::ProximitySettings settings = ProximityFromConfig();
+    // Outside an online race everyone in the room is heard at full volume.
+    const Voice::RoomMember* self = room.Local();
+    const int listenerPlayerId = self ? self->playerIds[0] : 0;
+    Voice::Listener listener;
+    const bool haveListener = LocalListener(listenerPlayerId, listener);
+    if (ProximityDebugTick()) {
+        if (haveListener) {
+            LogProximityDebug(listenerPlayerId, listener, settings);
+        } else {
+            LogProximityChain(listenerPlayerId);
+        }
+    }
+    const bool proximity = room.inRace && settings.enabled && haveListener;
+
+    for (const Voice::RoomMember& member : room.members) {
         if (member.local || member.publicIp == 0) {
             continue;
         }
-        VoiceChat::SetSpeakerGain(Voice::SpeakerIdFor(member), state.preferences.Gain(member.profileId));
+        const float base = state.preferences.Gain(member.profileId);
+        Voice::StereoGain spatial;
+        Voice::Vec3 position;
+        if (proximity && KartPosition(member.playerIds[0], position)) {
+            spatial = Voice::Spatialize(listener, position, Voice::IsPartyMember(member, room), settings);
+        }
+        VoiceChat::SetSpeakerGain(Voice::SpeakerIdFor(member), base * spatial.left, base * spatial.right);
     }
 }
 

@@ -62,9 +62,10 @@ using SpeakerId = uint64_t;
 // Queues one received Opus frame for playout.
 void DeliverFrame(SpeakerId speaker, uint16_t seq, const uint8_t* data, size_t size);
 void RemoveSpeaker(SpeakerId speaker);
-// Linear gain applied to this speaker only (per-player volume, mute = 0).
-// Changes are ramped over one frame so they never click.
-void SetSpeakerGain(SpeakerId speaker, float gain);
+// Linear gains applied to this speaker only, per output channel (per-player
+// volume, mute = 0, proximity attenuation and panning). Changes are ramped
+// over one frame so they never click.
+void SetSpeakerGain(SpeakerId speaker, float left, float right);
 // True while this speaker's decoded audio has been above the speech floor
 // within the last ~300 ms. Independent of gain, so a muted player still shows
 // as talking.

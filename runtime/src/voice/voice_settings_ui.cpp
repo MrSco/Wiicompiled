@@ -101,6 +101,42 @@ ImVec4 TeamColor(int8_t team) {
     return team == 0 ? ImVec4(1.0f, 0.45f, 0.45f, 1.0f) : ImVec4(0.45f, 0.65f, 1.0f, 1.0f);
 }
 
+void DrawProximity() {
+    ImGui::SeparatorText("Proximity");
+    bool proximity = VoiceConfig::Proximity();
+    if (ImGui::Checkbox("Proximity chat while racing", &proximity)) {
+        VoiceConfig::SetProximity(proximity);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("During a race, opponents get quieter the farther away their kart is.\n"
+                          "Friends, teammates and players on your console are always full volume.\n"
+                          "Between races everyone is full volume.");
+    }
+    ImGui::BeginDisabled(!proximity);
+    float range = VoiceConfig::ProximityRangeMeters();
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::SliderFloat("Hearing range", &range, 40.0f, 400.0f, "%.0f m")) {
+        VoiceConfig::SetProximityRangeMeters(range);
+    }
+    int minimumPercent = static_cast<int>(std::lround(VoiceConfig::ProximityMinimumVolume() * 100.0f));
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::SliderInt("Distant volume", &minimumPercent, 0, 50, "%d%%")) {
+        VoiceConfig::SetProximityMinimumVolume(static_cast<float>(minimumPercent) / 100.0f);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("How loud opponents beyond the hearing range still are. 0%% is silent.");
+    }
+    bool stereo = VoiceConfig::ProximityStereo();
+    if (ImGui::Checkbox("Stereo positioning", &stereo)) {
+        VoiceConfig::SetProximityStereo(stereo);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Places opponents' voices to the left or right of you.");
+    }
+    ImGui::EndDisabled();
+}
+
+
 void DrawPlayers() {
     ImGui::SeparatorText("Players in room");
     const Voice::RoomSnapshot& room = VoiceGame::Room();
@@ -249,6 +285,7 @@ void DrawSettings() {
         changed = true;
     }
 
+    DrawProximity();
     DrawPlayers();
 
     ImGui::EndDisabled();

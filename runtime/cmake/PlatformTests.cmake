@@ -91,6 +91,11 @@ target_include_directories(mkw_voice_config_tests PRIVATE
 target_compile_features(mkw_voice_config_tests PRIVATE cxx_std_20)
 add_test(NAME mkw_voice_config_tests COMMAND mkw_voice_config_tests)
 
+add_executable(mkw_voice_proximity_tests "${MKW_TEST_RUNTIME_DIR}/tests/voice_proximity_tests.cpp")
+target_include_directories(mkw_voice_proximity_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
+target_compile_features(mkw_voice_proximity_tests PRIVATE cxx_std_17)
+add_test(NAME mkw_voice_proximity_tests COMMAND mkw_voice_proximity_tests)
+
 # The emulated Bluetooth controller is pure host code.
 add_executable(mkw_bluetooth_controller_tests
     "${MKW_TEST_RUNTIME_DIR}/tests/bluetooth_controller_tests.cpp"
