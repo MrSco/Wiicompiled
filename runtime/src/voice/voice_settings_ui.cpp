@@ -9,6 +9,7 @@
 #include <SDL3/SDL_keyboard.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <string>
 
@@ -246,6 +247,14 @@ void DrawSettings() {
         }
     }
     DrawLevelMeter(settings);
+    if (ImGui::Checkbox("Lower game volume while talking", &settings.lowerGameVolume)) {
+        VoiceConfig::SetLowerGameVolume(settings.lowerGameVolume);
+        changed = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Turns the game's sound down while you talk, so less of it\n"
+                          "reaches your microphone and you can hear yourself think.");
+    }
 
     ImGui::SeparatorText("Microphone");
     const std::string current = settings.inputDevice.empty() ? "System default" : settings.inputDevice;
@@ -271,6 +280,22 @@ void DrawSettings() {
         settings.inputVolume = static_cast<float>(inputPercent) / 100.0f;
         VoiceConfig::SetInputVolume(settings.inputVolume);
         changed = true;
+    }
+    if (ImGui::Checkbox("Echo cancellation", &settings.echoCancellation)) {
+        VoiceConfig::SetEchoCancellation(settings.echoCancellation);
+        changed = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Removes the game's sound and other players' voices when your\n"
+                          "microphone picks them up from your speakers.\n"
+                          "Headphones avoid echo entirely.");
+    }
+    if (ImGui::Checkbox("Noise suppression", &settings.noiseSuppression)) {
+        VoiceConfig::SetNoiseSuppression(settings.noiseSuppression);
+        changed = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Removes steady background noise such as fans and hum.");
     }
     bool micTest = VoiceChat::MicTestEnabled();
     if (ImGui::Checkbox("Hear myself (mic test)", &micTest)) {
@@ -304,31 +329,58 @@ void DrawSettings() {
     }
 }
 
-// A small marker while your microphone is live, so push-to-talk has feedback
-// with the settings bar hidden.
+// A microphone drawn with primitives (the overlay font has no icons), filling
+// a box `size` tall whose top-left corner is `origin`.
+void DrawMicrophoneIcon(ImDrawList* draw, ImVec2 origin, float size, ImU32 color) {
+    const float cx = origin.x + size * 0.5f;
+    const float top = origin.y;
+    const float thickness = std::max(1.5f, size * 0.08f);
+    // Capsule
+    draw->AddRectFilled(ImVec2(cx - size * 0.18f, top + size * 0.04f), ImVec2(cx + size * 0.18f, top + size * 0.60f),
+                        color, size * 0.18f);
+    // Cradle around the capsule's lower half
+    draw->PathArcTo(ImVec2(cx, top + size * 0.40f), size * 0.31f, 0.0f, 3.14159265f, 16);  // lower half circle
+    draw->PathStroke(color, 0, thickness);
+    // Stand
+    draw->AddLine(ImVec2(cx, top + size * 0.71f), ImVec2(cx, top + size * 0.92f), color, thickness);
+    draw->AddLine(ImVec2(cx - size * 0.20f, top + size * 0.92f), ImVec2(cx + size * 0.20f, top + size * 0.92f), color,
+                  thickness);
+}
+
+// Shown in the bottom-left corner while your microphone is live, so
+// push-to-talk has clear feedback with the settings bar hidden. Scales with
+// the window so it stays readable on large screens.
 void DrawTalkingIndicator() {
     if (!VoiceChat::Transmitting()) {
         return;
     }
+    // Drawn straight onto the foreground layer rather than as a window, so its
+    // size is exactly the pill below (an ImGui window grows to fit its corner
+    // rounding, which a pill shape would make full-screen tall).
     const ImGuiIO& io = ImGui::GetIO();
-    constexpr float kMargin = 10.0f;
-    ImGui::SetNextWindowPos(ImVec2(kMargin, io.DisplaySize.y - kMargin), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
-    ImGui::SetNextWindowBgAlpha(0.55f);
-    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration |
-                                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoInputs |
-                                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav |
-                                         ImGuiWindowFlags_NoSavedSettings;
-    if (ImGui::Begin("Voice indicator", nullptr, kFlags)) {
-        const float radius = ImGui::GetTextLineHeight() * 0.3f;
-        const ImVec2 cursor = ImGui::GetCursorScreenPos();
-        ImGui::GetWindowDrawList()->AddCircleFilled(
-            ImVec2(cursor.x + radius, cursor.y + ImGui::GetTextLineHeight() * 0.5f), radius,
-            IM_COL32(80, 220, 110, 255));
-        ImGui::Dummy(ImVec2(radius * 2.0f, ImGui::GetTextLineHeight()));
-        ImGui::SameLine();
-        ImGui::TextUnformatted(VoiceChat::MicTestEnabled() ? "Mic test" : "Talking");
-    }
-    ImGui::End();
+    const float scale = std::clamp(io.DisplaySize.y / 720.0f, 1.0f, 3.0f);
+    const char* text = VoiceChat::MicTestEnabled() ? "Mic test" : "Talking";
+    ImFont* font = ImGui::GetFont();
+    const float fontSize = ImGui::GetFontSize() * 1.5f * scale;
+    const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text);
+    const float iconSize = fontSize;
+    const float gap = fontSize * 0.4f;
+    const ImVec2 padding(fontSize * 0.8f, fontSize * 0.35f);
+    const float width = padding.x * 2.0f + iconSize + gap + textSize.x;
+    const float height = padding.y * 2.0f + std::max(iconSize, textSize.y);
+    const float margin = 12.0f * scale;
+    const ImVec2 min(std::floor(margin), std::floor(io.DisplaySize.y - margin - height));
+    const ImVec2 max(min.x + width, min.y + height);
+
+    ImDrawList* draw = ImGui::GetForegroundDrawList();
+    draw->AddRectFilled(min, max, IM_COL32(20, 22, 28, 170), height * 0.5f);
+    const float contentTop = min.y + padding.y;
+    DrawMicrophoneIcon(draw, ImVec2(min.x + padding.x, contentTop + (height - padding.y * 2.0f - iconSize) * 0.5f),
+                       iconSize, IM_COL32(80, 220, 110, 255));
+    draw->AddText(font, fontSize,
+                  ImVec2(min.x + padding.x + iconSize + gap,
+                         contentTop + (height - padding.y * 2.0f - textSize.y) * 0.5f),
+                  IM_COL32(255, 255, 255, 255), text);
 }
 
 }  // namespace

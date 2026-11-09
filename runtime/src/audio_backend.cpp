@@ -15,7 +15,7 @@ AudioBackend& AudioBackend::Instance() {
 }
 
 float AudioBackend::EffectiveGainLocked() const {
-    return m_muted || m_silenced ? 0.0f : m_masterVolume;
+    return m_muted || m_silenced ? 0.0f : m_masterVolume * m_duckGain;
 }
 
 void AudioBackend::ApplyGainLocked() {
@@ -40,6 +40,20 @@ void AudioBackend::SetSilenced(bool silenced) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_silenced = silenced;
     ApplyGainLocked();
+}
+
+void AudioBackend::SetDuckGain(float gain) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_duckGain = std::clamp(gain, 0.0f, 1.0f);
+    ApplyGainLocked();
+}
+
+void AudioBackend::TapLocked(const int16_t* samples, size_t frames) {
+    if (const PlaybackTap tap = m_tap.load()) {
+        const int queued = SDL_GetAudioStreamQueued(m_stream);
+        tap(samples, frames, m_channels, m_sampleRate, queued > 0 ? static_cast<uint32_t>(queued) : 0u,
+            EffectiveGainLocked());
+    }
 }
 
 bool AudioBackend::EnsureInitializedLocked(uint32_t sampleRate, uint32_t channels) {
@@ -178,6 +192,7 @@ bool AudioBackend::PushWiiAiSamplesBE16(const uint8_t* data, size_t bytes) {
     if (!QueueHasCapacityLocked(lenBytes)) {
         return true;
     }
+    TapLocked(m_convertBuffer.data(), frameCount);
     if (!SDL_PutAudioStreamData(m_stream, m_convertBuffer.data(), lenBytes)) {
         RT_LOG(RT_TAG_AUDIO) << "SDL_PutAudioStreamData failed: " << SDL_GetError() << std::endl;
         return false;
@@ -199,6 +214,9 @@ bool AudioBackend::PushSamplesLE16(const int16_t* samples, size_t sampleCount) {
     const int lenBytes = static_cast<int>(sampleCount * sizeof(int16_t));
     if (!QueueHasCapacityLocked(lenBytes)) {
         return true;
+    }
+    if (m_channels != 0) {
+        TapLocked(samples, sampleCount / m_channels);
     }
     if (!SDL_PutAudioStreamData(m_stream, samples, lenBytes)) {
         RT_LOG(RT_TAG_AUDIO) << "SDL_PutAudioStreamData failed: " << SDL_GetError() << std::endl;

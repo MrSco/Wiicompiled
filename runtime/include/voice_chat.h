@@ -1,8 +1,9 @@
 #pragma once
 
-// Voice chat engine: microphone capture, push-to-talk / voice activation,
-// Opus encoding, per-speaker jitter buffering and a playback mix on its own
-// SDL output stream, separate from the game's audio.
+// Voice chat engine: microphone capture, echo cancellation and noise
+// suppression, push-to-talk / voice activation, Opus encoding, per-speaker
+// jitter buffering and a playback mix on its own SDL output stream, separate
+// from the game's audio.
 //
 // Everything runs on one worker thread that only exists while voice chat is
 // enabled, so a player who never turns it on never has the microphone opened.
@@ -21,6 +22,13 @@ struct Settings {
     float activationThresholdDb = -40.0f;
     std::string inputDevice;  // empty = system default
     float inputVolume = 1.0f;
+    // Removes the game's sound and other players' voices that the microphone
+    // picks up from speakers.
+    bool echoCancellation = true;
+    // Removes steady background noise (fans, hum).
+    bool noiseSuppression = true;
+    // Turns the game's sound down while you are talking.
+    bool lowerGameVolume = false;
     float volume = 1.0f;
     bool muteAll = false;
 };

@@ -26,7 +26,8 @@ void TestAllSettings() {
     const auto values = Parse(
         "[voice]\nenabled = true\ntalk_mode = \"voice_activation\"\npush_to_talk_key = 21\n"
         "activation_threshold_db = -35\ninput_device = \"USB Mic\"\ninput_volume = 1.5\n"
-        "volume = 0.25\nmute_all = true\n");
+        "volume = 0.25\nmute_all = true\necho_cancellation = false\nnoise_suppression = false\n"
+        "lower_game_volume = true\n");
     Check(values.enabled == std::optional<bool>{true}, "enabled");
     Check(values.pushToTalk == std::optional<bool>{false}, "voice activation mode");
     Check(values.pushToTalkKey == std::optional<int32_t>{21}, "push-to-talk key");
@@ -35,6 +36,9 @@ void TestAllSettings() {
     Check(values.inputVolume == std::optional<float>{1.5f}, "input volume");
     Check(values.volume == std::optional<float>{0.25f}, "volume");
     Check(values.muteAll == std::optional<bool>{true}, "mute all");
+    Check(values.echoCancellation == std::optional<bool>{false}, "echo cancellation off");
+    Check(values.noiseSuppression == std::optional<bool>{false}, "noise suppression off");
+    Check(values.lowerGameVolume == std::optional<bool>{true}, "lower game volume on");
 }
 
 void TestRejectsBadValues() {
@@ -50,7 +54,9 @@ void TestRejectsBadValues() {
 
 void TestMissingSectionAndInvalidFile() {
     const auto empty = Parse("[video]\nwidescreen = true\n");
-    Check(!empty.enabled && !empty.pushToTalk && !empty.volume, "no [voice] section: all defaults");
+    Check(!empty.enabled && !empty.pushToTalk && !empty.volume && !empty.echoCancellation &&
+              !empty.noiseSuppression && !empty.lowerGameVolume,
+          "no [voice] section: all defaults");
     const auto broken = Parse("[voice\nenabled = true\n");
     Check(!broken.enabled, "unparseable file: all defaults");
 }

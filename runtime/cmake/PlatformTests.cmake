@@ -84,6 +84,17 @@ target_link_libraries(mkw_voice_tests PRIVATE mkw::opus)
 target_compile_features(mkw_voice_tests PRIVATE cxx_std_17)
 add_test(NAME mkw_voice_tests COMMAND mkw_voice_tests)
 
+# Echo cancellation, noise suppression and the playback timeline behind them,
+# on synthetic signals.
+include("${CMAKE_CURRENT_LIST_DIR}/SpeexDsp.cmake")
+add_executable(mkw_voice_echo_tests
+    "${MKW_TEST_RUNTIME_DIR}/tests/voice_echo_tests.cpp"
+    "${MKW_TEST_RUNTIME_DIR}/src/voice/voice_echo.cpp")
+target_include_directories(mkw_voice_echo_tests PRIVATE "${MKW_TEST_RUNTIME_DIR}/include")
+target_link_libraries(mkw_voice_echo_tests PRIVATE mkw::speexdsp)
+target_compile_features(mkw_voice_echo_tests PRIVATE cxx_std_17)
+add_test(NAME mkw_voice_echo_tests COMMAND mkw_voice_echo_tests)
+
 add_executable(mkw_voice_config_tests "${MKW_TEST_RUNTIME_DIR}/tests/voice_config_tests.cpp")
 target_include_directories(mkw_voice_config_tests PRIVATE
     "${MKW_TEST_RUNTIME_DIR}/include"

@@ -35,6 +35,16 @@ struct LinkPeer {
     uint16_t gamePort = 0;   // network byte order
 };
 
+// Counters for one open..close of the link (one room), for the log line
+// written when it closes.
+struct LinkStats {
+    size_t membersSeen = 0;     // room members with an address, over the whole room
+    size_t membersReached = 0;  // of those, how many had voice chat answer at some point
+    uint64_t framesSpoken = 0;  // frames handed to SendVoice
+    uint64_t framesSent = 0;    // of those, how many went to at least one member
+    uint64_t framesReceived = 0;
+};
+
 class Link {
 public:
     // Called on the link's worker thread for each received voice frame.
@@ -62,6 +72,8 @@ public:
     void SendVoice(uint16_t sequence, const uint8_t* data, size_t size);
     // True while this member's voice chat is answering.
     bool Reached(uint64_t speakerId) const;
+    // Since the last Open; kept after Close until the next Open.
+    LinkStats Stats() const;
 
 private:
     struct Impl;

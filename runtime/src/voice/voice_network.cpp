@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <map>
 #include <mutex>
+#include <set>
 #include <thread>
 
 namespace Voice {
@@ -124,6 +125,10 @@ struct Link::Impl {
     uint32_t localProfileId = 0;
     uint16_t helloSequence = 0;
     std::map<uint64_t, PeerState> peers;
+    // For LinkStats: everyone seen and reached since Open, by speaker id.
+    std::set<uint64_t> membersSeen;
+    std::set<uint64_t> membersReached;
+    LinkStats stats;
     const LinkClock::time_point epoch = LinkClock::now();
 
     uint32_t NowMillis() const {
@@ -170,6 +175,9 @@ struct Link::Impl {
         }
         const LinkClock::time_point now = LinkClock::now();
         if (packet->type == PacketType::Bye) {
+            if (peer->reached) {
+                std::fprintf(stderr, "[audio] voice chat: profile %u left voice chat\n", peer->info.profileId);
+            }
             peer->reached = false;
             return;
         }
@@ -177,6 +185,7 @@ struct Link::Impl {
             std::fprintf(stderr, "[audio] voice chat: connected to profile %u\n", peer->info.profileId);
         }
         peer->reached = true;
+        membersReached.insert(peer->info.speakerId);
         peer->voicePort = from.sin_port;
         peer->lastHeard = now;
         switch (packet->type) {
@@ -185,6 +194,7 @@ struct Link::Impl {
                    EncodeClockPacket(PacketType::HelloAck, packet->sequence, localProfileId, ReadClock(*packet)));
             break;
         case PacketType::Voice:
+            ++stats.framesReceived;
             received.push_back({peer->info.speakerId, packet->sequence,
                                 std::vector<uint8_t>(packet->payload, packet->payload + packet->payloadSize)});
             break;
@@ -290,6 +300,9 @@ bool Link::Open(uint16_t localGamePort, uint32_t bindAddress) {
     socklen_t length = sizeof(local);
     getsockname(impl.socket, reinterpret_cast<sockaddr*>(&local), &length);
     impl.boundPort = ntohs(local.sin_port);
+    impl.membersSeen.clear();
+    impl.membersReached.clear();
+    impl.stats = {};
     MakeNonBlocking(impl.socket);
     std::fprintf(stderr, "[audio] voice chat: voice socket on port %u (game port %u)\n", impl.boundPort,
                  localGamePort);
@@ -306,6 +319,15 @@ void Link::Close() {
     }
     std::lock_guard<std::mutex> lock(impl.mutex);
     if (impl.socket != kNoSocket) {
+        impl.stats.membersSeen = impl.membersSeen.size();
+        impl.stats.membersReached = impl.membersReached.size();
+        const LinkStats& stats = impl.stats;
+        std::fprintf(stderr,
+                     "[audio] voice chat: left room: voice chat reached %zu of %zu player(s); "
+                     "sent %llu of %llu frame(s) you spoke, received %llu frame(s)\n",
+                     stats.membersReached, stats.membersSeen, static_cast<unsigned long long>(stats.framesSent),
+                     static_cast<unsigned long long>(stats.framesSpoken),
+                     static_cast<unsigned long long>(stats.framesReceived));
         const auto bye = EncodePacket(PacketType::Bye, 0, impl.localProfileId, nullptr, 0);
         for (const auto& [id, peer] : impl.peers) {
             if (peer.reached) {
@@ -349,6 +371,7 @@ void Link::SetRoom(uint32_t localProfileId, const std::vector<LinkPeer>& peers) 
         Impl::PeerState state = existing != impl.peers.end() ? existing->second : Impl::PeerState{};
         state.info = peer;
         next[peer.speakerId] = state;
+        impl.membersSeen.insert(peer.speakerId);
     }
     impl.peers.swap(next);
 }
@@ -359,12 +382,27 @@ void Link::SendVoice(uint16_t sequence, const uint8_t* data, size_t size) {
     if (impl.socket == kNoSocket || size == 0 || size > kMaxPacketBytes) {
         return;
     }
+    ++impl.stats.framesSpoken;
     const auto packet = EncodePacket(PacketType::Voice, sequence, impl.localProfileId, data, size);
+    bool sent = false;
     for (const auto& [id, peer] : impl.peers) {
         if (peer.reached) {
             impl.SendTo(peer.info.ip, peer.voicePort, packet);
+            sent = true;
         }
     }
+    if (sent) {
+        ++impl.stats.framesSent;
+    }
+}
+
+LinkStats Link::Stats() const {
+    const Impl& impl = *m_impl;
+    std::lock_guard<std::mutex> lock(impl.mutex);
+    LinkStats stats = impl.stats;
+    stats.membersSeen = impl.membersSeen.size();
+    stats.membersReached = impl.membersReached.size();
+    return stats;
 }
 
 bool Link::Reached(uint64_t speakerId) const {

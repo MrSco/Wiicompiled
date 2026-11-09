@@ -150,6 +150,10 @@ void TestLinkEndToEnd() {
               "frame arrives intact, attributed to A");
     }
     Check(inboxA.Count() == 0, "the sender does not hear itself");
+    const Voice::LinkStats statsA = a.Stats();
+    Check(statsA.membersSeen == 2 && statsA.membersReached == 1, "A saw two members and reached one");
+    Check(statsA.framesSpoken == 1 && statsA.framesSent == 1, "A counts the frame it sent");
+    Check(b.Stats().framesReceived == 1, "B counts the frame it received");
 
     // An impostor on the same address claiming B as a peer, with a profile id
     // B does not expect, gets no answer and can never send B voice.
@@ -162,12 +166,15 @@ void TestLinkEndToEnd() {
     impostor.SendVoice(1, frame, sizeof(frame));
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     Check(inboxB.Count() == 1, "no voice from the impostor");
+    Check(impostor.Stats().framesSpoken == 1 && impostor.Stats().framesSent == 0,
+          "a frame nobody could hear is spoken but not sent");
     impostor.Close();
 
     b.Close();
     Check(WaitFor([&] { return !a.Reached(kSpeakerB); }), "A sees B leave (Bye)");
     a.Close();
     Check(!a.IsOpen() && a.BoundPort() == 0, "closed link releases its socket");
+    Check(a.Stats().membersReached == 1, "stats survive Close for the log line");
 }
 
 void TestBusyPortFallsBack() {

@@ -1,9 +1,11 @@
 #include "voice_chat.h"
 
+#include "audio_backend.h"
 #include "voice_config.h"
 #include "runtime_log.h"
 #include "voice/voice_codec.h"
 #include "voice/voice_dsp.h"
+#include "voice/voice_echo.h"
 #include "voice/voice_jitter_buffer.h"
 
 #include <SDL3/SDL_audio.h>
@@ -13,6 +15,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <mutex>
@@ -38,6 +41,26 @@ constexpr uint64_t kLoopbackSpeaker = ~uint64_t{0};
 constexpr float kSpeechFloorDb = -50.0f;
 // How long a speaker still shows as talking after their last speech frame.
 constexpr int kTalkingHoldFrames = 15;  // 300 ms
+
+// "Lower game volume while talking" turns the game down to this (about -12 dB),
+// ramping by kDuckStep per worker tick so it never clicks.
+constexpr float kDuckGain = 0.25f;
+constexpr float kDuckStep = 0.05f;
+
+// The echo canceller's timeline: 48 kHz frames on the steady clock. Starts ten
+// seconds in so positions slightly in the past are never negative.
+int64_t TimelineNow() {
+    static const Clock::time_point epoch = Clock::now();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - epoch).count();
+    return (elapsed * Voice::kSampleRate) / 1000000 + int64_t{10} * Voice::kSampleRate;
+}
+
+// PlaybackReference sources.
+constexpr int kGameSource = 0;
+constexpr int kVoiceSource = 1;
+
+void OnGamePlayback(const int16_t* samples, size_t frames, uint32_t channels, uint32_t sampleRate,
+                    uint32_t queuedBytes, float gain);
 
 struct Speaker {
     Voice::JitterBuffer jitter;
@@ -72,9 +95,12 @@ public:
             start = settings.enabled && !m_running;
             stop = !settings.enabled && m_running;
             m_settings = settings;
+            m_referenceWanted = m_running && settings.echoCancellation;
             if (m_running && !stop && deviceChanged) {
                 CloseCaptureLocked();
                 OpenCaptureLocked();
+                // A different microphone has a different echo path and noise.
+                m_echo.Reset();
             }
         }
         if (start) {
@@ -97,6 +123,17 @@ public:
         if (!m_encoder.Init()) {
             SetUnavailableLocked("the Opus encoder could not be created");
         }
+        m_echoReady = m_echo.Init();
+        if (!m_echoReady) {
+            RT_LOGF(RT_TAG_AUDIO, "voice chat: echo cancellation could not be started\n");
+        }
+        {
+            std::lock_guard<std::mutex> referenceLock(m_referenceMutex);
+            m_reference.Reset();
+        }
+        m_captureCursor.Reset();
+        m_referenceWanted = m_settings.echoCancellation;
+        AudioBackend::Instance().SetPlaybackTap(&OnGamePlayback);
         OpenPlaybackLocked();
         OpenCaptureLocked();
         m_stop = false;
@@ -117,6 +154,11 @@ public:
         if (worker.joinable()) {
             worker.join();
         }
+        AudioBackend::Instance().SetPlaybackTap(nullptr);
+        m_referenceWanted = false;
+        m_duck = 1.0f;
+        m_duckTarget = 1.0f;
+        AudioBackend::Instance().SetDuckGain(1.0f);
         std::lock_guard<std::mutex> lock(m_mutex);
         CloseCaptureLocked();
         if (m_playback) {
@@ -188,6 +230,22 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         const auto it = m_speakers.find(speaker);
         return it != m_speakers.end() && it->second.framesSinceSpeech < kTalkingHoldFrames;
+    }
+
+    // Game audio about to be queued for the speakers (AudioBackend's tap).
+    void AddGamePlayback(const int16_t* samples, size_t frames, uint32_t channels, uint32_t sampleRate,
+                         uint32_t queuedBytes, float gain) {
+        if (!m_referenceWanted || channels == 0 || sampleRate == 0) {
+            return;
+        }
+        const double queuedSeconds =
+            static_cast<double>(queuedBytes) / (static_cast<double>(sampleRate) * channels * sizeof(int16_t));
+        const int64_t start = TimelineNow() + std::llround(queuedSeconds * Voice::kSampleRate);
+        std::lock_guard<std::mutex> lock(m_referenceMutex);
+        if (m_gameResampler.Convert(samples, frames, channels, sampleRate, gain, m_gameConverted)) {
+            m_reference.Add(kGameSource, start, m_gameConverted.data(),
+                            m_gameConverted.size() / Voice::kEchoReferenceChannels);
+        }
     }
 
 private:
@@ -278,14 +336,26 @@ private:
                 ProcessCaptureLocked();
                 ProcessPlaybackLocked();
             }
+            UpdateDuck();
             std::this_thread::sleep_for(kWorkerTick);
         }
+    }
+
+    // Ramps the game's volume toward what "lower game volume while talking" wants.
+    void UpdateDuck() {
+        const float target = m_duckTarget;
+        if (m_duck == target) {
+            return;
+        }
+        m_duck = m_duck < target ? std::min(target, m_duck + kDuckStep) : std::max(target, m_duck - kDuckStep);
+        AudioBackend::Instance().SetDuckGain(m_duck);
     }
 
     void ProcessCaptureLocked() {
         if (!m_capture) {
             m_levelDb = Voice::kSilenceDb;
             m_transmitting = false;
+            m_duckTarget = 1.0f;
             return;
         }
         std::array<float, Voice::kFrameSamples> chunk{};
@@ -296,21 +366,46 @@ private:
             }
             m_captured.insert(m_captured.end(), chunk.begin(), chunk.begin() + got / sizeof(float));
         }
+        // The newest captured sample arrived just now; older ones are counted back from it.
+        const int64_t capturedEnd = TimelineNow();
         size_t offset = 0;
         while (m_captured.size() - offset >= static_cast<size_t>(Voice::kFrameSamples)) {
-            ProcessFrameLocked(m_captured.data() + offset);
+            const int64_t frameStart = capturedEnd - static_cast<int64_t>(m_captured.size() - offset);
+            ProcessFrameLocked(m_captured.data() + offset, frameStart);
             offset += Voice::kFrameSamples;
         }
         m_captured.erase(m_captured.begin(), m_captured.begin() + static_cast<std::ptrdiff_t>(offset));
     }
 
-    void ProcessFrameLocked(float* frame) {
+    // Removes echo and background noise from one captured frame, before the
+    // level, the activation gate and the encoder see it.
+    void CleanFrameLocked(float* frame, int64_t captureStart) {
+        const bool cancelEcho = m_settings.echoCancellation;
+        if (!m_echoReady || (!cancelEcho && !m_settings.noiseSuppression)) {
+            return;
+        }
+        const int64_t start = m_captureCursor.Place(captureStart, Voice::kFrameSamples);
+        std::array<float, Voice::kEchoFrameSamples * Voice::kEchoReferenceChannels> reference{};
+        for (int part = 0; part < Voice::kFrameSamples / Voice::kEchoFrameSamples; ++part) {
+            if (cancelEcho) {
+                std::lock_guard<std::mutex> lock(m_referenceMutex);
+                m_reference.Read(start + int64_t{part} * Voice::kEchoFrameSamples, reference.data(),
+                                 Voice::kEchoFrameSamples);
+            }
+            m_echo.Process(frame + part * Voice::kEchoFrameSamples, reference.data(), cancelEcho,
+                           m_settings.noiseSuppression);
+        }
+    }
+
+    void ProcessFrameLocked(float* frame, int64_t captureStart) {
+        CleanFrameLocked(frame, captureStart);
         Voice::ApplyGain(frame, Voice::kFrameSamples, m_settings.inputVolume);
         const float level = Voice::LevelDb(frame, Voice::kFrameSamples);
         m_levelDb = level;
         const bool gateOpen = m_gate.Update(level, m_settings.activationThresholdDb);
         const bool transmit = m_settings.pushToTalk ? m_pushToTalkHeld.load() : gateOpen;
         m_transmitting = transmit;
+        m_duckTarget = transmit && m_settings.lowerGameVolume ? kDuckGain : 1.0f;
         if (!transmit) {
             return;
         }
@@ -354,6 +449,13 @@ private:
         while (SDL_GetAudioStreamQueued(m_playback) < kPlaybackQueueBytes) {
             std::array<float, Voice::kFrameSamples * kOutputChannels> mix{};
             MixFrameLocked(mix.data());
+            if (m_referenceWanted) {
+                // Other players' voices come out of the speakers too.
+                const int queued = std::max(SDL_GetAudioStreamQueued(m_playback), 0);
+                const int64_t start = TimelineNow() + queued / static_cast<int>(sizeof(float) * kOutputChannels);
+                std::lock_guard<std::mutex> lock(m_referenceMutex);
+                m_reference.Add(kVoiceSource, start, mix.data(), Voice::kFrameSamples);
+            }
             if (!SDL_PutAudioStreamData(m_playback, mix.data(), kOutputFrameBytes)) {
                 break;
             }
@@ -423,7 +525,28 @@ private:
     uint16_t m_sequence = 0;
     std::map<uint64_t, Speaker> m_speakers;
     std::map<uint64_t, std::pair<float, float>> m_pendingGains;
+
+    // Echo cancellation. The reference is written from the game's audio thread
+    // and the worker, so it has its own lock, always taken last.
+    Voice::EchoCanceller m_echo;
+    bool m_echoReady = false;
+    Voice::TimelineCursor m_captureCursor;
+    std::atomic<bool> m_referenceWanted{false};
+    std::mutex m_referenceMutex;
+    Voice::PlaybackReference m_reference;
+    Voice::ReferenceResampler m_gameResampler;
+    std::vector<float> m_gameConverted;
+
+    // Lowering the game's volume while talking: the target is set per frame,
+    // the worker ramps toward it.
+    std::atomic<float> m_duckTarget{1.0f};
+    float m_duck = 1.0f;
 };
+
+void OnGamePlayback(const int16_t* samples, size_t frames, uint32_t channels, uint32_t sampleRate,
+                    uint32_t queuedBytes, float gain) {
+    Engine::Instance().AddGamePlayback(samples, frames, channels, sampleRate, queuedBytes, gain);
+}
 
 Settings SettingsFromConfig() {
     Settings settings;
@@ -432,6 +555,9 @@ Settings SettingsFromConfig() {
     settings.activationThresholdDb = VoiceConfig::ActivationThresholdDb();
     settings.inputDevice = VoiceConfig::InputDevice();
     settings.inputVolume = VoiceConfig::InputVolume();
+    settings.echoCancellation = VoiceConfig::EchoCancellation();
+    settings.noiseSuppression = VoiceConfig::NoiseSuppression();
+    settings.lowerGameVolume = VoiceConfig::LowerGameVolume();
     settings.volume = VoiceConfig::Volume();
     settings.muteAll = VoiceConfig::MuteAll();
     return settings;
