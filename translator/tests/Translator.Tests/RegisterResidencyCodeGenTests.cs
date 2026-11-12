@@ -19,7 +19,8 @@ public class RegisterResidencyCodeGenTests
         bool stateFree = false,
         uint entryPoint = 0x80001000u,
         IReadOnlyDictionary<uint, GuestAbiContract>? guestAbiContracts = null,
-        IReadOnlySet<uint>? fullContextCallTargets = null)
+        IReadOnlySet<uint>? fullContextCallTargets = null,
+        IReadOnlySet<uint>? lrContinuationCallTargets = null)
     {
         var contract = GuestAbiContractAnalyzer.Analyze(function);
         return new CxxLinearCodeGenerator().Emit(
@@ -29,6 +30,7 @@ public class RegisterResidencyCodeGenTests
             types ?? new RepresentationEnvironment(new Dictionary<string, ValueRepresentation>()),
             guestAbiContracts: guestAbiContracts,
             fullContextCallTargets: fullContextCallTargets,
+            lrContinuationCallTargets: lrContinuationCallTargets,
             emitStateFreeLeafVariant: stateFree,
             stateFreeAbiContracts: stateFree
                 ? new Dictionary<uint, GuestAbiContract> { [entryPoint] = contract }
@@ -373,6 +375,39 @@ public class RegisterResidencyCodeGenTests
         Assert.True(call > 0);
         Assert.Contains("ctx->gpr[5] = r5;", body[..call], StringComparison.Ordinal);
         Assert.Contains("    r4 = ctx->gpr[4];", body[call..], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BoundaryNarrowingDoesNotApplyToLrContinuationCalls()
+    {
+        // The callee can resume through ctx->lr into code outside its own
+        // contract, which reads every register from the context.
+        var function = new IrFunction("lr_continuation_call", "entry", new[]
+        {
+            new IrBasicBlock("entry", new IrInstruction[]
+            {
+                new IrBinary("r5", IrValue.Register("r5"), IrValue.Register("r6"), "add"),
+                new IrAssign("lr", IrValue.Imm(0x80001010)),
+                new IrCall(string.Empty, "0x80002000", Array.Empty<IrValue>()),
+                new IrBinary("r3", IrValue.Register("r3"), IrValue.Register("r5"), "add"),
+                new IrReturn(null)
+            })
+        });
+        var contracts = new Dictionary<uint, GuestAbiContract>
+        {
+            [0x80002000u] = NarrowContract(gprWrite: 1u << 3)
+        };
+
+        var body = FunctionBody(
+            Emit(
+                function,
+                guestAbiContracts: contracts,
+                lrContinuationCallTargets: new HashSet<uint> { 0x80002000u }),
+            "lr_continuation_call");
+        var call = body.IndexOf("InvokeDirectCpu<0x80002000u>(ctx);", StringComparison.Ordinal);
+        Assert.True(call > 0);
+
+        Assert.Contains("ctx->gpr[5] = r5;", body[..call], StringComparison.Ordinal);
     }
 
     [Fact]
