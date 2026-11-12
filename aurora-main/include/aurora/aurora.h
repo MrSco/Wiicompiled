@@ -209,9 +209,10 @@ typedef struct {
   // Appended to preserve the frameToken/eyes prefix used by older providers.
   AuroraStereoFrameMode mode;
   uint64_t contentTag;
-  // Predicted display time converted to std::chrono::steady_clock nanoseconds.
-  // Used for diagnostics. Scene playback has its own clock; the eye poses remain
-  // predicted for this time even when the runtime looks several game frames ahead.
+  // Predicted display time converted to std::chrono::steady_clock nanoseconds, 0 when
+  // unknown. With VR interpolation, scene playback advances by its steps between
+  // packets, never by its absolute value: the eye poses remain predicted for this time
+  // even when the runtime looks several game frames ahead.
   uint64_t displayTimeNanos;
   // Optional; inactive when zero-initialised.
   AuroraCockpit cockpit;
@@ -222,6 +223,9 @@ typedef struct {
   // everywhere else, for the host's compositor to show its own background
   // (the room, on a headset with passthrough) around it.
   bool window;
+  // The compositor's predicted display period in nanoseconds, 0 when unknown. Scene
+  // playback trusts a step between display times only when it is whole periods.
+  uint64_t displayPeriodNanos;
 } AuroraStereoFrame;
 
 /**

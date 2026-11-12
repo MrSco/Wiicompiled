@@ -164,10 +164,12 @@ then runs twice as often, a little more power for the same app GPU time.
 
 VR interpolation is independent of **Graphics > Race frame interpolation**. The simulation,
 physics, audio and VI remain at 60 Hz. Scene motion is delayed by one game frame (about 16.7 ms)
-to interpolate between known transforms. A monotonic scene playback clock is anchored when
-continuous history starts and follows the VI cadence without following per-frame seal jitter.
-Each rendered eye pair still uses a fresh predicted head pose. In particular, a runtime predicting
-head poses 40-60 ms ahead must not advance scene playback beyond its known endpoints.
+to interpolate between known transforms. Each image shows the scene at its own predicted display
+time minus a playback delay, so the scene advances by exactly the display's step (8.33 ms at
+120 Hz) however late the frame worker starts that image; see "Scene playback" below. Each
+rendered eye pair still uses a fresh predicted head pose. In particular, a runtime predicting
+head poses 40-60 ms ahead must not advance scene playback beyond its known endpoints: only the
+steps between display times are used, never their absolute value.
 This needs enough GPU headroom to render both eyes at the target rate, and carries the
 desktop interpolator's experimental artifacts, especially for unmatched or changing geometry.
 
@@ -1059,6 +1061,57 @@ updates. A mid-frame EFB readback invalidates retained GPU data; a policy-tag mi
 the replay. Missing matches use current transforms, and stalls clamp at the last known pose
 instead of extrapolating. The ordinary desktop interpolation settings remain independent.
 
+### Scene playback
+
+`aurora::stereo::ScenePlaybackClock` (`aurora-main/lib/stereo_interpolation.hpp`) chooses the
+scene time each headset image shows. Until 2026-11 it was the frame worker's own wake time on a
+clock anchored at the seals, so every step carried the worker's scheduling jitter: a PS VR2 at
+120 Hz logged scene steps of 7.1-9.6 ms (median per-second range, 972 windows) for an 8.33 ms
+refresh, and the GPU smoke test 7.8-8.9 ms at 120 Hz, 10.1-12.2 at 90 and 13.1-14.7 at 72.
+The desktop interpolation has no such jitter: it draws its slots at fixed fractions and
+presents each at a scheduled deadline (`slotPresentDeadline` in `aurora.cpp`).
+
+Each image now advances the scene by its display-time step (`AuroraStereoFrame::displayTimeNanos`
+and `displayPeriodNanos`, from `predictedDisplayTime` and `predictedDisplayPeriod`). A step that
+is not a whole number of display periods, or that disagrees with the render step by more than
+three quarters of one (the runtime moved its prediction horizon, as Virtual Desktop does), is
+replaced by the render step.
+
+Only the newest pair of game frames is retained, so an image can only blend within the window
+that is newest when it renders: a sample before that window's start shows the previous frame
+early, and one past its end holds the newest frame. Whether an image rendered before or after a
+seal therefore still matters, and the clock keeps the moment playback crosses into a new window
+near the seals. It starts as if each blend began at its seal. After a second without a
+correction it moves playback, by at most 2% of a display period per image, halfway towards
+whichever end of the window had more room (measured per seal cycle, by its closest sample to
+each end, and the sixth-closest cycle counts, so a few hitched frames do not move it). When the
+seals move for good (a clamp deeper than 2 ms in three of the
+last six seal cycles, all on one side, as when a scene gets heavier or shader compilation ends),
+playback is set to the clamped end at once, which changes nothing on screen because the image
+shows that end anyway. A cut, a restarted producer schedule or host clock, or playback a whole
+game frame behind starts it again.
+
+In the GPU smoke test (D3D12, 1000 draws) the scene now steps exactly 8.33, 11.11 and 13.89 ms
+at 120, 90 and 72 Hz once warm, apart from 2% recentring steps.
+
+On the headsets (2026-11-12, v0.9.4) a temporary build ran the former clock beside the new one
+and alternated them every 11 s in one session, swapping the order each round. Each image's
+scene step was compared with its display step:
+
+| | PS VR2, SteamVR, 120 Hz, `--race-cpu` | Quest 3, 72 Hz, first GP race |
+|---|---|---|
+| Mean error, wake-time clock | 0.42 ms (8885 images) | 0.71 ms (7252 images) |
+| Mean error, display-time clock | 0.087 ms (8285 images) | 0.12 ms (6524 images) |
+| Steps off by over 1 ms, wake / display | 14.1% / 2.5% | 24.6% / 7.9% |
+
+Every display-clock slot beat every wake-clock slot on both headsets. What remains are images
+clamped at a window end, where the game's seals vary by more than the room playback has on
+either side of them (about 1.3-1.5 ms on the Quest at 72 Hz). An image whose render can fall
+on either side of a seal keeps an error of up to half the render jitter; the unit tests measure
+the rest (`StereoInterpolation.Playback*`, `SealJitterIsSplitAroundTheSeals`,
+`SealsThatMoveForGoodAreFollowedWithinAFewSealCycles`, `SingleHitchesHoldOnlyTheirOwnImages`). Retaining one more game frame would let
+playback sit a frame behind with room on both sides, at the cost of a frame of scene latency.
+
 Matched rigid draws retain transform history through rotations over 90 degrees per game frame
 (such as spinning kart tires); large spins use spherical interpolation to preserve angular speed
 and wheel shape. A one-matrix draw is split into a rotation and an upper-triangular stretch
@@ -1351,7 +1404,13 @@ When it is on, `console.log` receives lines tagged `[runtime] [xr-diag]`
   these counts do not measure GPU time. `max-rejected` is the highest rejection count
   observed during the window. `scene-step` gives minimum/maximum forward scene-time
   advancement per sample in milliseconds; steady 90 Hz scene motion should advance about
-  11.11 ms each time, even when every submission is fresh. Enable the same renderer log with
+  11.11 ms each time, even when every submission is fresh. The `playback` group describes the
+  scene playback clock (see "Scene playback"): `room` is the lowest distance of a sample from
+  the start and from the end of its blend window (negative: shown early or held by that much;
+  `0.00` with `previous` counts right after a snap is samples exactly on a window start, the
+  right scene), `delay` the latest display time minus scene time, `shifted` and `snapped` the
+  samples recentred gradually or at once, and `display-irregular` / `horizon-jumps` the display
+  steps replaced by render steps. Enable the same renderer log with
   `debug.wiicompiled.fpslog=1` on Android, or `AURORA_VR_MOTION_LOG=1` in the environment
   before launching a host that does not use OpenXR.
 
@@ -1516,7 +1575,9 @@ The optional Windows GPU test `efb_ram_lifetime_smoke` exercises that allocation
 format/size changes. It fails with the former callback write and passes with deferred publication.
 
 The GX tests cover retained transform endpoints with desktop interpolation off and continuous
-sampling at 72/90/120 Hz. `mkw_frame_interpolation_pacing_tests` covers fixed-rate scheduling,
+sampling at 72/90/120 Hz, and drive the scene playback clock with a simulated 60 Hz producer
+and headset (render jitter, seal jitter, prediction-horizon jumps, load changes, stalls),
+checking each image's step against its display step. `mkw_frame_interpolation_pacing_tests` covers fixed-rate scheduling,
 live changes, stalls and configuration migration; `mkw_openxr_replay_tests` exercises swapchain
 ownership and retained-layer submission without a headset.
 

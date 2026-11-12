@@ -2343,6 +2343,7 @@ void log_stereo_motion(const AuroraStereoFrame& input, uint64_t sampleTime, floa
     samples = {};
     maxRejected = 0;
     start = std::chrono::steady_clock::now();
+    g_stereoPlaybackClock.take_diagnostics();
     return;
   }
   const auto& retained = g_retainedStereo;
@@ -2360,14 +2361,19 @@ void log_stereo_motion(const AuroraStereoFrame& input, uint64_t sampleTime, floa
     return a >= b ? static_cast<double>(a - b) / 1e6 : -static_cast<double>(b - a) / 1e6;
   };
   const uint64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+  const auto playback = g_stereoPlaybackClock.take_diagnostics();
   Log.info("[vr-motion] {:.2f}s samples={} blended={} previous={} current={} discontinuous={} "
-           "same-time={} backwards={} scene-step={:.2f}/{:.2f}ms max-rejected={} | latest "
+           "same-time={} backwards={} scene-step={:.2f}/{:.2f}ms max-rejected={} | playback "
+           "room={:.2f}/{:.2f}ms delay={:.2f}ms shifted={} snapped={} display-irregular={} horizon-jumps={} | latest "
            "display-boundary={:.2f}ms prediction-lead={:.2f}ms sample-boundary={:.2f}ms weight={:.3f} | latest draws "
            "candidates={} matched={} prepared={} rejected={} replay-safe={} camera-separated={} "
            "vertex-motion={} vertex-held={} wrap-cuts={}",
            seconds, samples.samples, samples.blended, samples.atPrevious, samples.atCurrent,
            samples.discontinuous, samples.repeated, samples.backwards,
            samples.minStep == UINT64_MAX ? 0.0 : samples.minStep / 1e6, samples.maxStep / 1e6, maxRejected,
+           playback.minFromStart == std::numeric_limits<int64_t>::max() ? 0.0 : playback.minFromStart / 1e6,
+           playback.minToEnd == std::numeric_limits<int64_t>::max() ? 0.0 : playback.minToEnd / 1e6,
+           playback.delay / 1e6, playback.shifted, playback.snapped, playback.displayIrregular, playback.horizonJumps,
            deltaMs(input.displayTimeNanos, retained.boundary), deltaMs(input.displayTimeNanos, nowNs),
            deltaMs(sampleTime, retained.boundary), weight,
            draws.candidates, draws.matches, draws.preparedDraws, draws.rejectedDraws, draws.replaySafe,
@@ -2381,7 +2387,8 @@ gfx::StereoReplayFrame interpolated_stereo_frame(const AuroraStereoFrame& input,
   const auto& retained = g_retainedStereo;
   const uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
                            std::chrono::steady_clock::now().time_since_epoch()).count();
-  const uint64_t sampleTime = g_stereoPlaybackClock.sample_time(now);
+  const uint64_t sampleTime =
+      g_stereoPlaybackClock.sample_time(input.displayTimeNanos, input.displayPeriodNanos, now);
   weight = retained.continuous
                ? stereo::interpolation_weight(sampleTime, retained.boundary, retained.interval)
                : 1.0f;
@@ -2540,7 +2547,7 @@ void seal_frame_locked(gfx::SealedFrame& sealedFrame, SealedFrameContext& ctx, u
                       continuous, cameraMotion};
   const uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
                            std::chrono::steady_clock::now().time_since_epoch()).count();
-  g_stereoPlaybackClock.begin_scene(ctx.scheduleBaseNanos, now, continuous);
+  g_stereoPlaybackClock.begin_scene(ctx.scheduleBaseNanos, ctx.scheduleIntervalNanos, now, continuous);
   gfx::expire_bind_group_cache();
 }
 

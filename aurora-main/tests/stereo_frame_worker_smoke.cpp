@@ -132,6 +132,7 @@ int main(int argc, char** argv) {
         packet.displayTimeNanos =
             std::chrono::duration_cast<std::chrono::nanoseconds>(deadline.time_since_epoch()).count() +
             predictionLeadNanos;
+        packet.displayPeriodNanos = 1'000'000'000 / headsetHz;
         for (auto& eye : packet.eyes) {
           eye.width = 160;
           eye.height = 120;

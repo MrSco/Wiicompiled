@@ -1357,6 +1357,9 @@ private:
         destination.frameToken = source.xr_frame.serial;
         destination.contentTag = content_tag;
         destination.displayTimeNanos = DisplayTimeNanos(source.xr_frame.predicted_display_time);
+        destination.displayPeriodNanos = source.xr_frame.predicted_display_period > 0
+                                             ? static_cast<uint64_t>(source.xr_frame.predicted_display_period)
+                                             : 0;
         destination.mode = immersive ? AURORA_STEREO_FRAME_IMMERSIVE_REPLAY
                                       : AURORA_STEREO_FRAME_VIRTUAL_SCREEN;
         destination.window = immersive && source.presentation.immersive_window;
