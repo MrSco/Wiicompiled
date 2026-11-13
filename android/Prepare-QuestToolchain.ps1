@@ -47,7 +47,7 @@ $termuxPackages = @(
     @{ Name = 'libllvm'; File = 'pool/main/libl/libllvm/libllvm_21.1.8-3_aarch64.deb'; Sha256 = '5056a73f2645fc9c0759e6f94a1bd6edcf36305acaef58dc685211ced9cc2a02'
        License = 'Apache-2.0 WITH LLVM-exception'
        Files = @{ 'lib/libLLVM.so' = 'lib/libLLVM.so'; 'share/doc/libllvm/LICENSE.TXT' = 'licenses/llvm/LICENSE.TXT' } }
-    @{ Name = 'libc++'; File = 'pool/main/libc/libc++/libc++_29_aarch64.deb'; Sha256 = 'bb9f12113c137aa0e8513bb51cc49fe77a5ce3ca39ab9e92c57d228ecdf00222'
+    @{ Name = 'libc++'; File = 'pool/main/libc/libc++/libc++_30_aarch64.deb'; Sha256 = '53d0b84a7ba7459024257cb94d5b136fe13ef858567f65a8064b35950799f2ca'
        License = 'Apache-2.0 WITH LLVM-exception'
        Files = @{ 'lib/libc++_shared.so' = 'lib/libc++_shared.so' } }
     @{ Name = 'libffi'; File = 'pool/main/libf/libffi/libffi_3.8.0_aarch64.deb'; Sha256 = '4f255badf74cd31f6a2801c17fa1444199c84c834b517b7c843e2fe9ebe91d77'
@@ -56,16 +56,16 @@ $termuxPackages = @(
     @{ Name = 'libxml2'; File = 'pool/main/libx/libxml2/libxml2_2.15.4-1_aarch64.deb'; Sha256 = 'd315861bbcf716cfb088f53cddab9fb6a96430cc66769f79774cc69c2f53bcff'
        License = 'MIT'
        Files = @{ 'lib/libxml2.so.16.1.4' = 'lib/libxml2.so.16' } }
-    @{ Name = 'libiconv'; File = 'pool/main/libi/libiconv/libiconv_1.19_aarch64.deb'; Sha256 = 'fe9481b1dc101c6c3552943f25435109fd522aecc615ae49594f9fbee863bb37'
+    @{ Name = 'libiconv'; File = 'pool/main/libi/libiconv/libiconv_1.19.1_aarch64.deb'; Sha256 = 'a1c6323eff4f660e16ae6f5832356444b3269c19a4f61146355a49e7c4be5ed1'
        License = 'LGPL-2.1-or-later'
        Files = @{ 'lib/libiconv.so' = 'lib/libiconv.so' } }
-    @{ Name = 'zlib'; File = 'pool/main/z/zlib/zlib_1.3.2_aarch64.deb'; Sha256 = '75e7d0af17fcc3b40004309fdc00a1ddb9ae08346dce5e269902c34ac3966ac9'
+    @{ Name = 'zlib'; File = 'pool/main/z/zlib/zlib_1.4_aarch64.deb'; Sha256 = 'e3027565ae50bcd8ba5113c988b589754ae192c9cc3e6afbe3e4ed7c06b2598e'
        License = 'Zlib'
-       Files = @{ 'lib/libz.so.1.3.2' = 'lib/libz.so.1' } }
+       Files = @{ 'lib/libz.so.1.4' = 'lib/libz.so.1' } }
     @{ Name = 'zstd'; File = 'pool/main/z/zstd/zstd_1.5.7-1_aarch64.deb'; Sha256 = 'e1b4a5113648da8de189620ba1fce74c48b2d0833d9043391b9a1c91fb606fd3'
        License = 'BSD-3-Clause'
        Files = @{ 'lib/libzstd.so.1.5.7' = 'lib/libzstd.so.1' } }
-    @{ Name = 'openssl'; File = 'pool/main/o/openssl/openssl_1:3.6.3_aarch64.deb'; Sha256 = '86760e9ce736f463236f2c15b1eb3a3fdcfc5778d0fd7077a917448dcc90f3aa'
+    @{ Name = 'openssl'; File = 'pool/main/o/openssl/openssl_1:3.6.5_aarch64.deb'; Sha256 = 'a2fb7856875e63ef6b90442752e05974813372c3ca86d2513a78ea43c67a0f8b'
        License = 'Apache-2.0'
        # .NET's OpenSSL shim on Android loads "libssl.so" by that name; libssl needs libcrypto.so.3.
        Files = @{ 'lib/libssl.so.3' = 'lib/libssl.so'; 'lib/libcrypto.so.3' = 'lib/libcrypto.so.3' } }
