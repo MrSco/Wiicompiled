@@ -61,5 +61,12 @@ jobs:
           TAG: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
         run: |
+          # A release made by hand for this tag (for example the Quest APK) gets the setup added to it.
+          gh release view $env:TAG --repo $env:REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG artifacts/WiiCompiled-Setup.exe artifacts/SHA256SUMS.txt --repo $env:REPOSITORY --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Release upload failed.' }
+            exit 0
+          }
           gh release create $env:TAG artifacts/WiiCompiled-Setup.exe artifacts/SHA256SUMS.txt --repo $env:REPOSITORY --verify-tag --title "WiiCompiled OpenXR VR $env:TAG (beta)" --notes "Windows x64 OpenXR beta. Install through WheelWizard VR. Requires your own clean PAL RMCP01 disc image; game code and assets are compiled locally."
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
