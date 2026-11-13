@@ -5,8 +5,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- Voice chat's microphone. A runtime permission: the game asks for it the first time voice
-         chat is turned on (runtime/src/voice/voice_chat.cpp), never at startup. -->
+    <!-- Voice chat's microphone. A runtime permission, asked for by the launcher when Play is
+         pressed (LauncherActivity.askForMicrophone), never by the immersive game: a prompt over
+         it stops the OpenXR session. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- The launcher's disc image extraction runs as a foreground service that keeps the CPU awake. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

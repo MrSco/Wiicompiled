@@ -12,6 +12,7 @@
 #include <SDL3/SDL_init.h>
 #if defined(__ANDROID__)
 #include <SDL3/SDL_system.h>
+#include <jni.h>
 #endif
 
 #include <algorithm>
@@ -175,11 +176,6 @@ public:
         m_levelDb = Voice::kSilenceDb;
         m_micState = MicState::Off;
         m_micError.clear();
-#if defined(__ANDROID__)
-        m_openWhenAnswered = false;
-        int denied = kPermissionDenied;
-        m_micPermission.compare_exchange_strong(denied, kPermissionUnknown);
-#endif
         m_running = false;
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         RT_LOGF(RT_TAG_AUDIO, "voice chat: stopped\n");
@@ -300,43 +296,41 @@ private:
     }
 
 #if defined(__ANDROID__)
-    // Android asks the player before an app may record. SDL asks from inside
-    // the device open and blocks that thread until the answer, which here is
-    // the game's thread, so the game would freeze behind the prompt. Ask
-    // without blocking instead; the worker opens the microphone on the answer.
-    static void SDLCALL OnMicPermission(void* userdata, const char*, bool granted) {
-        static_cast<Engine*>(userdata)->m_micPermission = granted ? kPermissionGranted : kPermissionDenied;
-    }
-
-    bool MicPermissionGrantedLocked() {
-        int expected = kPermissionUnknown;
-        if (m_micPermission.compare_exchange_strong(expected, kPermissionAsking)) {
-            m_openWhenAnswered = true;
-            m_micState = MicState::Unavailable;
-            m_micError = "waiting for permission to use the microphone";
-            // Answers at once, on this thread, when the app already has it.
-            if (!SDL_RequestAndroidPermission("android.permission.RECORD_AUDIO", &OnMicPermission, this)) {
-                m_micPermission = kPermissionDenied;
+    // Android asks the player before an app may record, but never from in here: its prompt is a
+    // flat window, and one over the immersive game stops the OpenXR session, which came back
+    // black. The launcher asks when Play is pressed (LauncherActivity.askForMicrophone). SDL's
+    // own device open would ask, so check first and leave the microphone closed without it.
+    static bool HasMicPermission() {
+        auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+        auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
+        if (!env || !activity) {
+            return false;
+        }
+        bool granted = false;
+        if (jclass type = env->GetObjectClass(activity)) {
+            jmethodID check = env->GetMethodID(type, "checkSelfPermission", "(Ljava/lang/String;)I");
+            jstring name = env->NewStringUTF("android.permission.RECORD_AUDIO");
+            if (check && name) {
+                granted = env->CallIntMethod(activity, check, name) == 0;  // PERMISSION_GRANTED
             }
-            return false;
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+                granted = false;
+            }
+            if (name) env->DeleteLocalRef(name);
+            env->DeleteLocalRef(type);
         }
-        switch (expected) {
-        case kPermissionGranted:
-            return true;
-        case kPermissionDenied:
-            SetUnavailableLocked("permission to use the microphone was refused. Allow it in the headset's "
-                                 "Settings > Privacy > App permissions > Microphone, then turn voice chat off and on");
-            return false;
-        default:
-            m_openWhenAnswered = true;
-            return false;
-        }
+        env->DeleteLocalRef(activity);
+        return granted;
     }
 #endif
 
     void OpenCaptureLocked() {
 #if defined(__ANDROID__)
-        if (!MicPermissionGrantedLocked()) {
+        if (!HasMicPermission()) {
+            SetUnavailableLocked("voice chat needs the microphone. Quit to the WiiCompiled launcher and press Play "
+                                 "to allow it, or allow it in the headset's Settings > Privacy > App permissions > "
+                                 "Microphone, then turn voice chat off and on");
             return;
         }
 #endif
@@ -381,13 +375,6 @@ private:
         while (!m_stop) {
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
-#if defined(__ANDROID__)
-                if (m_openWhenAnswered && m_micPermission.load() != kPermissionAsking) {
-                    m_openWhenAnswered = false;
-                    CloseCaptureLocked();
-                    OpenCaptureLocked();
-                }
-#endif
                 ProcessCaptureLocked();
                 ProcessPlaybackLocked();
             }
@@ -571,15 +558,6 @@ private:
     std::atomic<float> m_levelDb{Voice::kSilenceDb};
     std::atomic<MicState> m_micState{MicState::Off};
     std::string m_micError;
-#if defined(__ANDROID__)
-    static constexpr int kPermissionUnknown = 0;
-    static constexpr int kPermissionAsking = 1;
-    static constexpr int kPermissionGranted = 2;
-    static constexpr int kPermissionDenied = 3;
-    // Set from SDL's permission callback, on whatever thread Android answers.
-    std::atomic<int> m_micPermission{kPermissionUnknown};
-    bool m_openWhenAnswered = false;
-#endif
 
     SDL_AudioStream* m_capture = nullptr;
     SDL_AudioStream* m_playback = nullptr;

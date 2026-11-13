@@ -4,7 +4,9 @@ import android.app.Activity
 import android.app.ActivityManager
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.net.Uri
 import android.os.Bundle
@@ -1000,6 +1002,9 @@ class LauncherActivity : Activity() {
         if (launching) {
             return
         }
+        if (askForMicrophone()) {
+            return
+        }
         launching = true
         trailsAway = true
         trails.leave {
@@ -1011,6 +1016,38 @@ class LauncherActivity : Activity() {
                 launching = false
                 refreshHome()
             }
+        }
+    }
+
+    /**
+     * Voice chat's microphone permission is asked for here, before the game starts, never inside
+     * it: Android's prompt is a flat window, and opening one over the immersive game stops its
+     * OpenXR session, which came back black. The first Play asks once; after that Play asks again
+     * only while voice chat is turned on and the microphone is still not allowed. The game starts
+     * whatever the answer. Returns true when the prompt is showing.
+     */
+    private fun askForMicrophone(): Boolean {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            return false
+        }
+        val preferences = getSharedPreferences(PREFERENCES, MODE_PRIVATE)
+        val askedBefore = preferences.getBoolean(KEY_MICROPHONE_ASKED, false)
+        val voiceOn = ConfigStore(GameStorage.configFile(this)).load()?.bool("voice", "enabled") == true
+        if (askedBefore && !voiceOn) {
+            return false
+        }
+        preferences.edit().putBoolean(KEY_MICROPHONE_ASKED, true).apply()
+        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_MICROPHONE)
+        return true
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_MICROPHONE) return
+        val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        Log.i(TAG, "Microphone permission for voice chat: ${if (granted) "allowed" else "not allowed"}")
+        if (!isDestroyed) {
+            startGame()
         }
     }
 
@@ -1047,6 +1084,8 @@ class LauncherActivity : Activity() {
         const val REQUEST_MII_EXPORT = 5
         const val REQUEST_MII_EXPORT_FOLDER = 6
         const val PREFERENCES = "launcher"
+        const val KEY_MICROPHONE_ASKED = "microphoneAsked"
+        const val REQUEST_MICROPHONE = 7301
         const val KEY_LAST_DROPPED_IMPORT = "lastDroppedImport"
         const val EXTRA_DEBUG_BUILD_GAME = "org.wiicompiled.quest.debug.BUILD_GAME"
         /** An int: the GameBanana mod to show, or -1 for the browser's first search alone. */
