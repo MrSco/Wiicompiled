@@ -72,6 +72,7 @@
 #include "wii_remote_input.h"
 #include "discord_presence.h"
 #include "physical_wheel.h"
+#include "voice_chat.h"
 #include "steam_input_layout.h"
 #include "fiber_manager.h"
 #include "hle_stubs.h"
@@ -1486,6 +1487,9 @@ int RuntimeMain(int argc, char** argv) {
         if (!g_headless && RuntimeConfigFile::DiscordPresenceEnabled()) {
             DiscordPresence::Initialize(RuntimeConfigFile::DiscordClientId(), "Mario Kart Wii");
         }
+        if (!g_headless) {
+            VoiceChat::Initialize();
+        }
         SystemBridge::Initialize();
         TranslatedFunctionRegistry::Finalize();
 
@@ -1701,6 +1705,7 @@ int RuntimeMain(int argc, char** argv) {
         mkw::vr::OpenXRShutdownBeforeAurora();
         physical_wheel::Shutdown();
         aurora_shutdown();
+        VoiceChat::Shutdown();
         DiscordPresence::Shutdown();
         SetRuntimeExitCodeImpl(0);
         ShutdownProcessTranscript();
@@ -1723,6 +1728,7 @@ int RuntimeMain(int argc, char** argv) {
         mkw::vr::OpenXRShutdownBeforeAurora();
         physical_wheel::Shutdown();
         aurora_shutdown();
+        VoiceChat::Shutdown();
         DiscordPresence::Shutdown();
         ShutdownProcessTranscript();
         return 1;
@@ -1739,6 +1745,7 @@ int RuntimeMain(int argc, char** argv) {
         mkw::vr::OpenXRShutdownBeforeAurora();
         physical_wheel::Shutdown();
         aurora_shutdown();
+        VoiceChat::Shutdown();
         DiscordPresence::Shutdown();
         ShutdownProcessTranscript();
         return 1;

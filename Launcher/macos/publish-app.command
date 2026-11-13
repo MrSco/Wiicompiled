@@ -62,6 +62,7 @@ cat > "$app/Contents/Info.plist" <<EOF
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>$minimum_system_version</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Voice chat with other players in online rooms uses your microphone while it is turned on.</string>
 </dict></plist>
 EOF
 ditto "$icon" "$resources/$product.icns"

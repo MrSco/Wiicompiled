@@ -1,0 +1,440 @@
+#include "voice_settings_ui.h"
+
+#include "voice_chat.h"
+#include "voice_config.h"
+#include "voice_game.h"
+
+#include <imgui.h>
+#include <SDL3/SDL_events.h>
+#include <SDL3/SDL_keyboard.h>
+
+#include <algorithm>
+#include <cfloat>
+#include <cmath>
+#include <string>
+
+namespace VoiceSettingsUi {
+namespace {
+
+bool g_pushToTalkDown = false;
+bool g_capturingKey = false;
+// ImGui frame on which the menu was last open. A key capture only counts while
+// the menu is actually showing, so hiding the bar mid-capture abandons it.
+int g_menuOpenFrame = -1;
+
+bool CaptureActive() {
+    if (g_capturingKey && g_menuOpenFrame < ImGui::GetFrameCount() - 1) {
+        g_capturingKey = false;
+    }
+    return g_capturingKey;
+}
+
+const ImVec4 kGreen(0.40f, 0.90f, 0.50f, 1.0f);
+const ImVec4 kRed(1.0f, 0.45f, 0.35f, 1.0f);
+
+// Maps a dBFS level onto the meter's 0..1 range. -60 dB and below reads empty.
+float MeterFraction(float db) {
+    constexpr float kFloorDb = -60.0f;
+    return std::clamp((db - kFloorDb) / -kFloorDb, 0.0f, 1.0f);
+}
+
+void SetPushToTalkHeld(bool held) {
+    if (held != g_pushToTalkDown) {
+        g_pushToTalkDown = held;
+        VoiceChat::SetPushToTalkHeld(held);
+    }
+}
+
+void DrawPushToTalkKey() {
+    const int32_t key = VoiceConfig::PushToTalkKey();
+    std::string caption;
+    if (g_capturingKey) {
+        caption = "Press a key...";
+    } else if (key > 0 && key < SDL_SCANCODE_COUNT) {
+        caption = SDL_GetScancodeName(static_cast<SDL_Scancode>(key));
+    }
+    if (caption.empty()) {
+        caption = "None";
+    }
+    if (ImGui::Button((caption + "##pushToTalkKey").c_str(), ImVec2(120.0f, 0.0f))) {
+        g_capturingKey = !g_capturingKey;
+        SetPushToTalkHeld(false);
+    }
+    ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+    ImGui::TextUnformatted("Push-to-talk key");
+    if (g_capturingKey) {
+        ImGui::TextDisabled("Escape cancels, Backspace clears. F10 is reserved.");
+    }
+}
+
+void DrawLevelMeter(const VoiceChat::Settings& settings) {
+    const VoiceChat::MicState micState = VoiceChat::GetMicState();
+    const float level = micState == VoiceChat::MicState::Open ? VoiceChat::InputLevelDb() : -96.0f;
+    const bool transmitting = VoiceChat::Transmitting();
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, transmitting ? ImVec4(0.30f, 0.80f, 0.40f, 1.0f)
+                                                                : ImVec4(0.55f, 0.55f, 0.60f, 1.0f));
+    ImGui::ProgressBar(MeterFraction(level), ImVec2(220.0f, 0.0f), "");
+    ImGui::PopStyleColor();
+    if (!settings.pushToTalk) {
+        // Mark the activation level on the meter so the slider has a visible target.
+        const ImVec2 min = ImGui::GetItemRectMin();
+        const ImVec2 max = ImGui::GetItemRectMax();
+        const float x = min.x + (max.x - min.x) * MeterFraction(settings.activationThresholdDb);
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(x, min.y), ImVec2(x, max.y), IM_COL32(255, 210, 80, 255), 2.0f);
+    }
+    ImGui::SameLine();
+    if (!settings.enabled) {
+        ImGui::TextDisabled("Off");
+    } else if (micState == VoiceChat::MicState::Unavailable) {
+        ImGui::TextColored(kRed, "Microphone unavailable");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", VoiceChat::MicError().c_str());
+        }
+    } else if (transmitting) {
+        ImGui::TextColored(kGreen, "Sending");
+    } else {
+        ImGui::TextDisabled("Not sending");
+    }
+}
+
+ImVec4 TeamColor(int8_t team) {
+    // Team VS/battle: 0 = red, 1 = blue, matching the game's own colours.
+    return team == 0 ? ImVec4(1.0f, 0.45f, 0.45f, 1.0f) : ImVec4(0.45f, 0.65f, 1.0f, 1.0f);
+}
+
+void DrawProximity() {
+    ImGui::SeparatorText("Proximity");
+    bool proximity = VoiceConfig::Proximity();
+    if (ImGui::Checkbox("Proximity chat while racing", &proximity)) {
+        VoiceConfig::SetProximity(proximity);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("During a race, opponents get quieter the farther away their kart is.\n"
+                          "Friends, teammates and players on your console are always full volume.\n"
+                          "Between races everyone is full volume.");
+    }
+    ImGui::BeginDisabled(!proximity);
+    float range = VoiceConfig::ProximityRangeMeters();
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::SliderFloat("Hearing range", &range, 40.0f, 400.0f, "%.0f m")) {
+        VoiceConfig::SetProximityRangeMeters(range);
+    }
+    int minimumPercent = static_cast<int>(std::lround(VoiceConfig::ProximityMinimumVolume() * 100.0f));
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::SliderInt("Distant volume", &minimumPercent, 0, 50, "%d%%")) {
+        VoiceConfig::SetProximityMinimumVolume(static_cast<float>(minimumPercent) / 100.0f);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("How loud opponents beyond the hearing range still are. 0%% is silent.");
+    }
+    bool stereo = VoiceConfig::ProximityStereo();
+    if (ImGui::Checkbox("Stereo positioning", &stereo)) {
+        VoiceConfig::SetProximityStereo(stereo);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Places opponents' voices to the left or right of you.");
+    }
+    ImGui::EndDisabled();
+}
+
+
+void DrawPlayers() {
+    ImGui::SeparatorText("Players in room");
+    const Voice::RoomSnapshot& room = VoiceGame::Room();
+    if (!room.online) {
+        ImGui::TextDisabled("Not in an online room.");
+        return;
+    }
+    const float lineHeight = ImGui::GetTextLineHeight();
+    for (const Voice::RoomMember& member : room.members) {
+        ImGui::PushID(member.aid);
+        // Talking dot. Remote players light up from their decoded audio, you
+        // from your own transmit state.
+        const bool talking = member.local ? VoiceChat::Transmitting()
+                                          : VoiceChat::SpeakerTalking(Voice::SpeakerIdFor(member));
+        const ImVec2 cursor = ImGui::GetCursorScreenPos();
+        const float radius = lineHeight * 0.3f;
+        ImGui::GetWindowDrawList()->AddCircleFilled(
+            ImVec2(cursor.x + radius, cursor.y + lineHeight * 0.5f + ImGui::GetStyle().FramePadding.y), radius,
+            talking ? IM_COL32(80, 220, 110, 255) : IM_COL32(90, 90, 100, 255));
+        ImGui::Dummy(ImVec2(radius * 2.0f, ImGui::GetFrameHeight()));
+        ImGui::SameLine();
+
+        std::string label = member.name.empty() ? "Player " + std::to_string(member.aid + 1) : member.name;
+        if (member.local) label += " (you)";
+        else if (member.friendOfMine) label += " (friend)";
+        const bool hasVoice = VoiceGame::HasVoiceChat(member);
+        ImGui::AlignTextToFramePadding();
+        if (room.teamMode && member.team >= 0) {
+            ImGui::TextColored(TeamColor(member.team), "%s", label.c_str());
+        } else {
+            ImGui::TextUnformatted(label.c_str());
+        }
+        if (!member.local && !hasVoice) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("no voice chat");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("This player has no voice chat (or it could not connect).\n"
+                                  "They play normally; you just cannot hear each other.");
+            }
+        }
+
+        if (!member.local) {
+            ImGui::SameLine(200.0f);
+            const bool identified = member.profileId != 0;
+            ImGui::BeginDisabled(!identified);
+            bool muted = VoiceGame::Muted(member);
+            if (ImGui::Checkbox("Mute", &muted)) {
+                VoiceGame::SetMuted(member, muted);
+            }
+            ImGui::EndDisabled();
+            if (!identified && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("This player's profile has not been received yet.");
+            }
+            ImGui::SameLine();
+            int percent = static_cast<int>(std::lround(VoiceGame::Volume(member) * 100.0f));
+            ImGui::SetNextItemWidth(120.0f);
+            // Volume is remembered per profile, so it needs the profile id too.
+            ImGui::BeginDisabled(muted || !identified);
+            if (ImGui::SliderInt("##volume", &percent, 0, 200, "%d%%")) {
+                VoiceGame::SetVolume(member, static_cast<float>(percent) / 100.0f);
+            }
+            ImGui::EndDisabled();
+        }
+        ImGui::PopID();
+    }
+}
+
+
+void DrawSettings() {
+    VoiceChat::Settings settings = VoiceChat::CurrentSettings();
+    bool changed = false;
+
+    if (ImGui::Checkbox("Enable voice chat", &settings.enabled)) {
+        VoiceConfig::SetEnabled(settings.enabled);
+        if (!settings.enabled) {
+            VoiceChat::SetMicTest(false);
+            g_capturingKey = false;
+        }
+        changed = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "Talk with other WiiCompiled players in online rooms. Players without\n"
+            "voice chat cannot hear you and play normally. The microphone is only\n"
+            "used while this is on.");
+    }
+
+    ImGui::BeginDisabled(!settings.enabled);
+
+    ImGui::SeparatorText("Talking");
+    int mode = settings.pushToTalk ? 0 : 1;
+    const bool pushToTalkPicked = ImGui::RadioButton("Push-to-talk", &mode, 0);
+    ImGui::SameLine();
+    const bool activationPicked = ImGui::RadioButton("Voice activated", &mode, 1);
+    if (pushToTalkPicked || activationPicked) {
+        settings.pushToTalk = mode == 0;
+        VoiceConfig::SetPushToTalk(settings.pushToTalk);
+        changed = true;
+    }
+    if (settings.pushToTalk) {
+        DrawPushToTalkKey();
+    } else {
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::SliderFloat("Activation level", &settings.activationThresholdDb, -80.0f, 0.0f, "%.0f dB")) {
+            VoiceConfig::SetActivationThresholdDb(settings.activationThresholdDb);
+            changed = true;
+        }
+    }
+    DrawLevelMeter(settings);
+    if (ImGui::Checkbox("Lower game volume while talking", &settings.lowerGameVolume)) {
+        VoiceConfig::SetLowerGameVolume(settings.lowerGameVolume);
+        changed = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Turns the game's sound down while you talk, so less of it\n"
+                          "reaches your microphone and you can hear yourself think.");
+    }
+
+    ImGui::SeparatorText("Microphone");
+    const std::string current = settings.inputDevice.empty() ? "System default" : settings.inputDevice;
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::BeginCombo("Device", current.c_str())) {
+        if (ImGui::Selectable("System default", settings.inputDevice.empty())) {
+            settings.inputDevice.clear();
+            VoiceConfig::SetInputDevice(settings.inputDevice);
+            changed = true;
+        }
+        for (const std::string& name : VoiceChat::InputDeviceNames()) {
+            if (ImGui::Selectable(name.c_str(), name == settings.inputDevice)) {
+                settings.inputDevice = name;
+                VoiceConfig::SetInputDevice(settings.inputDevice);
+                changed = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    int inputPercent = static_cast<int>(std::lround(settings.inputVolume * 100.0f));
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::SliderInt("Mic volume", &inputPercent, 0, 200, "%d%%")) {
+        settings.inputVolume = static_cast<float>(inputPercent) / 100.0f;
+        VoiceConfig::SetInputVolume(settings.inputVolume);
+        changed = true;
+    }
+    if (ImGui::Checkbox("Echo cancellation", &settings.echoCancellation)) {
+        VoiceConfig::SetEchoCancellation(settings.echoCancellation);
+        changed = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Removes the game's sound and other players' voices when your\n"
+                          "microphone picks them up from your speakers.\n"
+                          "Headphones avoid echo entirely.");
+    }
+    if (ImGui::Checkbox("Noise suppression", &settings.noiseSuppression)) {
+        VoiceConfig::SetNoiseSuppression(settings.noiseSuppression);
+        changed = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Removes steady background noise such as fans and hum.");
+    }
+    bool micTest = VoiceChat::MicTestEnabled();
+    if (ImGui::Checkbox("Hear myself (mic test)", &micTest)) {
+        VoiceChat::SetMicTest(micTest);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Plays your voice back exactly as other players hear it.\n"
+                          "Use headphones to avoid feedback.");
+    }
+
+    ImGui::SeparatorText("Listening");
+    int volumePercent = static_cast<int>(std::lround(settings.volume * 100.0f));
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::SliderInt("Voice volume", &volumePercent, 0, 100, "%d%%")) {
+        settings.volume = static_cast<float>(volumePercent) / 100.0f;
+        VoiceConfig::SetVolume(settings.volume);
+        changed = true;
+    }
+    if (ImGui::Checkbox("Mute everyone", &settings.muteAll)) {
+        VoiceConfig::SetMuteAll(settings.muteAll);
+        changed = true;
+    }
+
+    DrawProximity();
+    DrawPlayers();
+
+    ImGui::EndDisabled();
+
+    if (changed) {
+        VoiceChat::ApplySettings(settings);
+    }
+}
+
+// A microphone drawn with primitives (the overlay font has no icons), filling
+// a box `size` tall whose top-left corner is `origin`.
+void DrawMicrophoneIcon(ImDrawList* draw, ImVec2 origin, float size, ImU32 color) {
+    const float cx = origin.x + size * 0.5f;
+    const float top = origin.y;
+    const float thickness = std::max(1.5f, size * 0.08f);
+    // Capsule
+    draw->AddRectFilled(ImVec2(cx - size * 0.18f, top + size * 0.04f), ImVec2(cx + size * 0.18f, top + size * 0.60f),
+                        color, size * 0.18f);
+    // Cradle around the capsule's lower half
+    draw->PathArcTo(ImVec2(cx, top + size * 0.40f), size * 0.31f, 0.0f, 3.14159265f, 16);  // lower half circle
+    draw->PathStroke(color, 0, thickness);
+    // Stand
+    draw->AddLine(ImVec2(cx, top + size * 0.71f), ImVec2(cx, top + size * 0.92f), color, thickness);
+    draw->AddLine(ImVec2(cx - size * 0.20f, top + size * 0.92f), ImVec2(cx + size * 0.20f, top + size * 0.92f), color,
+                  thickness);
+}
+
+// Shown in the bottom-left corner while your microphone is live, so
+// push-to-talk has clear feedback with the settings bar hidden. Scales with
+// the window so it stays readable on large screens.
+void DrawTalkingIndicator() {
+    if (!VoiceChat::Transmitting()) {
+        return;
+    }
+    // Drawn straight onto the foreground layer rather than as a window, so its
+    // size is exactly the pill below (an ImGui window grows to fit its corner
+    // rounding, which a pill shape would make full-screen tall).
+    const ImGuiIO& io = ImGui::GetIO();
+    const float scale = std::clamp(io.DisplaySize.y / 720.0f, 1.0f, 3.0f);
+    const char* text = VoiceChat::MicTestEnabled() ? "Mic test" : "Talking";
+    ImFont* font = ImGui::GetFont();
+    const float fontSize = ImGui::GetFontSize() * 1.5f * scale;
+    const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text);
+    const float iconSize = fontSize;
+    const float gap = fontSize * 0.4f;
+    const ImVec2 padding(fontSize * 0.8f, fontSize * 0.35f);
+    const float width = padding.x * 2.0f + iconSize + gap + textSize.x;
+    const float height = padding.y * 2.0f + std::max(iconSize, textSize.y);
+    const float margin = 12.0f * scale;
+    const ImVec2 min(std::floor(margin), std::floor(io.DisplaySize.y - margin - height));
+    const ImVec2 max(min.x + width, min.y + height);
+
+    ImDrawList* draw = ImGui::GetForegroundDrawList();
+    draw->AddRectFilled(min, max, IM_COL32(20, 22, 28, 170), height * 0.5f);
+    const float contentTop = min.y + padding.y;
+    DrawMicrophoneIcon(draw, ImVec2(min.x + padding.x, contentTop + (height - padding.y * 2.0f - iconSize) * 0.5f),
+                       iconSize, IM_COL32(80, 220, 110, 255));
+    draw->AddText(font, fontSize,
+                  ImVec2(min.x + padding.x + iconSize + gap,
+                         contentTop + (height - padding.y * 2.0f - textSize.y) * 0.5f),
+                  IM_COL32(255, 255, 255, 255), text);
+}
+
+}  // namespace
+
+void DrawMenu() {
+    const char* label = VoiceChat::CurrentSettings().enabled ? "Voice chat: On###VoiceChatMenu"
+                                                             : "Voice chat: Off###VoiceChatMenu";
+    if (ImGui::BeginMenu(label)) {
+        g_menuOpenFrame = ImGui::GetFrameCount();
+        DrawSettings();
+        ImGui::EndMenu();
+    }
+}
+
+void DrawOverlays() {
+    // This runs on the guest thread at the same point every frame, so it is
+    // where voice chat reads the room from game memory.
+    VoiceGame::Update();
+    DrawTalkingIndicator();
+}
+
+void HandleSdlEvent(const SDL_Event& event, bool otherRebindActive) {
+    if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+        // The key-up would go to another window and leave the microphone live.
+        SetPushToTalkHeld(false);
+        return;
+    }
+    const bool keyDown = event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat;
+    if (keyDown && CaptureActive()) {
+        const SDL_Scancode code = event.key.scancode;
+        if (code == SDL_SCANCODE_ESCAPE) {
+            g_capturingKey = false;
+        } else if (code == SDL_SCANCODE_BACKSPACE || code == SDL_SCANCODE_DELETE) {
+            VoiceConfig::SetPushToTalkKey(0);
+            g_capturingKey = false;
+        } else if (code != SDL_SCANCODE_F10) {
+            VoiceConfig::SetPushToTalkKey(static_cast<int32_t>(code));
+            g_capturingKey = false;
+        }
+        return;
+    }
+    const int32_t key = VoiceConfig::PushToTalkKey();
+    if (key <= 0) {
+        return;
+    }
+    if (event.type == SDL_EVENT_KEY_UP && event.key.scancode == static_cast<SDL_Scancode>(key)) {
+        SetPushToTalkHeld(false);
+    } else if (keyDown && !otherRebindActive && event.key.scancode == static_cast<SDL_Scancode>(key)) {
+        SetPushToTalkHeld(true);
+    }
+}
+
+bool CapturingKey() {
+    return CaptureActive();
+}
+
+}  // namespace VoiceSettingsUi

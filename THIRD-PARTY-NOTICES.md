@@ -120,6 +120,29 @@ vendored in `runtime/third_party/toml11`.
 Source: <https://github.com/ToruNiina/toml11/tree/v4.4.0>. Full license text:
 `runtime/third_party/toml11/LICENSE`.
 
+### Opus 1.5.2 - BSD-3-Clause
+
+Copyright (c) 2001-2023 Xiph.Org, Skype Limited, Octasic, Jean-Marc Valin, Timothy B. Terriberry,
+CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo, Mozilla, Amazon.
+Voice chat encodes and decodes speech with libopus. The portable float encoder and decoder from the
+1.5.2 release are vendored in `runtime/third_party/opus`; SIMD variants and the optional `dnn/`
+tree are not included.
+Source: <https://opus-codec.org/>, release tarball
+<https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz>. Full license text:
+`runtime/third_party/opus/COPYING`.
+
+### SpeexDSP 1.2.1 - BSD-3-Clause
+
+Copyright (c) 2002-2008 Xiph.org Foundation, Jean-Marc Valin, Analog Devices Inc., CSIRO, David Rowe,
+EpicGames, Jutta Degener, Carsten Bormann, Thorvald Natvig.
+Voice chat removes echo and background noise from the microphone with SpeexDSP's echo canceller and
+preprocessor, and resamples game audio for the echo canceller with its resampler. Those sources from
+the 1.2.1 release (float build) are vendored in `runtime/third_party/speexdsp`; the fixed-point and
+SIMD variants, the jitter buffer and the test programs are not included.
+Source: <https://www.speex.org/>, release tarball
+<https://downloads.xiph.org/releases/speex/speexdsp-1.2.1.tar.gz>. Full license text:
+`runtime/third_party/speexdsp/COPYING`.
+
 ### YamlDotNet - MIT
 
 Copyright (c) Antoine Aubry and contributors.

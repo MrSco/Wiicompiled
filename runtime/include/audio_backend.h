@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -24,6 +25,17 @@ public:
     void SetMuted(bool muted);
     // Mutes output without touching the user's persisted mute setting.
     void SetSilenced(bool silenced);
+    // Extra output gain owned by voice chat (lowering the game while you talk).
+    void SetDuckGain(float gain);
+
+    // Sees every block queued for playback: interleaved native S16 frames, the
+    // bytes already queued ahead of it, and the gain the stream applies. Voice
+    // chat's echo cancellation uses it to know what the speakers will play.
+    // Called with the backend's lock held, so it must be quick and must not
+    // call back into AudioBackend.
+    using PlaybackTap = void (*)(const int16_t* samples, size_t frames, uint32_t channels, uint32_t sampleRate,
+                                 uint32_t queuedBytes, float gain);
+    void SetPlaybackTap(PlaybackTap tap) { m_tap = tap; }
 
 private:
     AudioBackend() = default;
@@ -36,6 +48,7 @@ private:
     uint32_t QueueLimitBytesLocked() const;
     float EffectiveGainLocked() const;
     void ApplyGainLocked();
+    void TapLocked(const int16_t* samples, size_t frames);
 
     mutable std::mutex m_mutex;
     SDL_AudioStream* m_stream = nullptr;
@@ -46,6 +59,8 @@ private:
     float m_masterVolume = 1.0f;
     bool m_muted = false;
     bool m_silenced = false;
+    float m_duckGain = 1.0f;
+    std::atomic<PlaybackTap> m_tap{nullptr};
     bool m_reportedDroppedBlock = false;
     std::vector<int16_t> m_convertBuffer;
 };

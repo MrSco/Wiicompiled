@@ -21,6 +21,7 @@
 #include "vr/openxr_integration.h"
 #include "vr/openxr_settings_panel.h"
 #include "vr/openxr_wii_remote.h"
+#include "voice_settings_ui.h"
 #include "wii_remote_input.h"
 
 #include <aurora/imgui.h>
@@ -2743,6 +2744,7 @@ void DrawTopBar() {
         DrawRebindPrompt();
         ImGui::EndMenu();
     }
+    VoiceSettingsUi::DrawMenu();
 
     if (ImGui::BeginMenu("Diagnostics")) {
         DrawDiagnosticsSettings();
@@ -3140,17 +3142,20 @@ void HandleEvents(const AuroraEvent* events) noexcept {
             SetTopBarVisible(!g_topBarVisible);
             ApplyInputBlockState();
         }
-        if (!g_rebind.active && g_vrRecenterScancode != SDL_SCANCODE_UNKNOWN &&
+        // A key pressed to set the push-to-talk key belongs to that capture alone.
+        const bool voiceKeyCapture = VoiceSettingsUi::CapturingKey();
+        VoiceSettingsUi::HandleSdlEvent(ev->sdl, g_rebind.active);
+        if (!g_rebind.active && !voiceKeyCapture && g_vrRecenterScancode != SDL_SCANCODE_UNKNOWN &&
             IsToggleKey(ev->sdl, g_vrRecenterScancode)) {
             mkw::vr::OpenXRRequestRecenter();
         }
-        if (!g_rebind.active && g_muteHotkey != PAD_KEY_INVALID &&
+        if (!g_rebind.active && !voiceKeyCapture && g_muteHotkey != PAD_KEY_INVALID &&
             IsToggleKey(ev->sdl, static_cast<SDL_Scancode>(g_muteHotkey))) {
             g_audioMuted = !g_audioMuted;
             AudioBackend::Instance().SetMuted(g_audioMuted);
             RuntimeConfigFile::SetAudioMuted(g_audioMuted);
         }
-        if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_ESCAPE)) {
+        if (!g_rebind.active && !voiceKeyCapture && IsToggleKey(ev->sdl, SDL_SCANCODE_ESCAPE)) {
             if (g_exitPromptOpen) {
                 g_exitPromptOpen = false;
             } else if (g_topBarVisible) {
@@ -3233,6 +3238,7 @@ void Draw() noexcept {
         DrawShaderCompilationStatus();
     }
     DrawFpsOverlay();
+    VoiceSettingsUi::DrawOverlays();
     DrawTopBar();
     DrawExitPrompt();
     controller_mapping_wizard::Draw();
