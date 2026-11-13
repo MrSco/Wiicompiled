@@ -9,6 +9,8 @@ namespace VoiceSettingsUi {
 
 // The "Voice chat" menu in the top bar. Call between BeginMainMenuBar/EndMainMenuBar.
 void DrawMenu();
+// The same settings as the Voice chat tab of the VR headset settings panel.
+void DrawPanel();
 // Once per presented frame, on the guest thread: refreshes the room from game
 // memory and draws things outside the menu (the talking indicator).
 void DrawOverlays();

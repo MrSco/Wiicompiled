@@ -591,7 +591,7 @@ else()
         # mkw_mbedtls: network_ssl.cpp, the TLS backend the Android products link.
         target_link_libraries(mkw_android_native_compile PRIVATE
             aurora::gx aurora::pad aurora::si aurora::vi aurora::mtx
-            mkw::pugixml mkw::toml11 mkw::cryptopp mkw::libco mkw_mbedtls)
+            mkw::pugixml mkw::toml11 mkw::cryptopp mkw::libco mkw_mbedtls mkw::opus mkw::speexdsp)
         if(MKW_ENABLE_OPENXR)
             target_link_libraries(mkw_android_native_compile PRIVATE ${MKW_OPENXR_TARGET})
         endif()

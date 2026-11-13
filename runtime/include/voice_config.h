@@ -7,7 +7,7 @@
 //
 //   [voice]
 //   enabled = false                  # the microphone is only opened while true
-//   talk_mode = "push_to_talk"       # or "voice_activation"
+//   talk_mode = "push_to_talk"       # or "voice_activation" (the default on Android)
 //   push_to_talk_key = 25            # SDL scancode (25 = V)
 //   activation_threshold_db = -40.0  # -80 to 0
 //   input_device = ""                # device name; empty = system default
@@ -123,7 +123,13 @@ inline std::string FormatFloat(float value) {
 }
 
 inline bool Enabled() { return Get().enabled.value_or(false); }
-inline bool PushToTalk() { return Get().pushToTalk.value_or(true); }
+#if defined(__ANDROID__)
+// A headset has no keyboard, so it starts voice activated.
+inline constexpr bool kDefaultPushToTalk = false;
+#else
+inline constexpr bool kDefaultPushToTalk = true;
+#endif
+inline bool PushToTalk() { return Get().pushToTalk.value_or(kDefaultPushToTalk); }
 // 25 is SDL_SCANCODE_V; spelled out so this header does not need SDL.
 inline constexpr int32_t kDefaultPushToTalkKey = 25;
 inline int32_t PushToTalkKey() { return Get().pushToTalkKey.value_or(kDefaultPushToTalkKey); }

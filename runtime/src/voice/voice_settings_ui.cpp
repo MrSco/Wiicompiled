@@ -21,6 +21,16 @@ bool g_capturingKey = false;
 // ImGui frame on which the menu was last open. A key capture only counts while
 // the menu is actually showing, so hiding the bar mid-capture abandons it.
 int g_menuOpenFrame = -1;
+// True while drawing the VR headset panel's tab. That panel has its own ImGui
+// context, drawn at twice the desktop scale and aimed at with controllers, so
+// it offers no key capture and spells out what the desktop shows in tooltips.
+bool g_inPanel = false;
+
+// Desktop sizes, in pixels at the overlay's default 13 px font, scaled to the
+// current font so the widgets keep their proportions in the headset panel.
+float Px(float desktopPixels) {
+    return desktopPixels * ImGui::GetFontSize() / 13.0f;
+}
 
 bool CaptureActive() {
     if (g_capturingKey && g_menuOpenFrame < ImGui::GetFrameCount() - 1) {
@@ -47,6 +57,18 @@ void SetPushToTalkHeld(bool held) {
 
 void DrawPushToTalkKey() {
     const int32_t key = VoiceConfig::PushToTalkKey();
+    if (g_inPanel) {
+        const char* name = key > 0 && key < SDL_SCANCODE_COUNT ? SDL_GetScancodeName(static_cast<SDL_Scancode>(key)) : "";
+#if defined(__ANDROID__)
+        ImGui::TextWrapped("Push-to-talk key: %s, on a Bluetooth keyboard paired with the headset. "
+                           "Without one, pick Voice activated.",
+                           name[0] != '\0' ? name : "None");
+#else
+        ImGui::TextWrapped("Push-to-talk key: %s. Change it from the F10 Voice chat menu on the desktop.",
+                           name[0] != '\0' ? name : "None");
+#endif
+        return;
+    }
     std::string caption;
     if (g_capturingKey) {
         caption = "Press a key...";
@@ -56,7 +78,7 @@ void DrawPushToTalkKey() {
     if (caption.empty()) {
         caption = "None";
     }
-    if (ImGui::Button((caption + "##pushToTalkKey").c_str(), ImVec2(120.0f, 0.0f))) {
+    if (ImGui::Button((caption + "##pushToTalkKey").c_str(), ImVec2(Px(120.0f), 0.0f))) {
         g_capturingKey = !g_capturingKey;
         SetPushToTalkHeld(false);
     }
@@ -73,7 +95,7 @@ void DrawLevelMeter(const VoiceChat::Settings& settings) {
     const bool transmitting = VoiceChat::Transmitting();
     ImGui::PushStyleColor(ImGuiCol_PlotHistogram, transmitting ? ImVec4(0.30f, 0.80f, 0.40f, 1.0f)
                                                                 : ImVec4(0.55f, 0.55f, 0.60f, 1.0f));
-    ImGui::ProgressBar(MeterFraction(level), ImVec2(220.0f, 0.0f), "");
+    ImGui::ProgressBar(MeterFraction(level), ImVec2(Px(220.0f), 0.0f), "");
     ImGui::PopStyleColor();
     if (!settings.pushToTalk) {
         // Mark the activation level on the meter so the slider has a visible target.
@@ -87,7 +109,9 @@ void DrawLevelMeter(const VoiceChat::Settings& settings) {
         ImGui::TextDisabled("Off");
     } else if (micState == VoiceChat::MicState::Unavailable) {
         ImGui::TextColored(kRed, "Microphone unavailable");
-        if (ImGui::IsItemHovered()) {
+        if (g_inPanel) {
+            ImGui::TextWrapped("%s", VoiceChat::MicError().c_str());
+        } else if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s", VoiceChat::MicError().c_str());
         }
     } else if (transmitting) {
@@ -115,12 +139,12 @@ void DrawProximity() {
     }
     ImGui::BeginDisabled(!proximity);
     float range = VoiceConfig::ProximityRangeMeters();
-    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SetNextItemWidth(Px(220.0f));
     if (ImGui::SliderFloat("Hearing range", &range, 40.0f, 400.0f, "%.0f m")) {
         VoiceConfig::SetProximityRangeMeters(range);
     }
     int minimumPercent = static_cast<int>(std::lround(VoiceConfig::ProximityMinimumVolume() * 100.0f));
-    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SetNextItemWidth(Px(220.0f));
     if (ImGui::SliderInt("Distant volume", &minimumPercent, 0, 50, "%d%%")) {
         VoiceConfig::SetProximityMinimumVolume(static_cast<float>(minimumPercent) / 100.0f);
     }
@@ -180,7 +204,7 @@ void DrawPlayers() {
         }
 
         if (!member.local) {
-            ImGui::SameLine(200.0f);
+            ImGui::SameLine(Px(200.0f));
             const bool identified = member.profileId != 0;
             ImGui::BeginDisabled(!identified);
             bool muted = VoiceGame::Muted(member);
@@ -193,7 +217,7 @@ void DrawPlayers() {
             }
             ImGui::SameLine();
             int percent = static_cast<int>(std::lround(VoiceGame::Volume(member) * 100.0f));
-            ImGui::SetNextItemWidth(120.0f);
+            ImGui::SetNextItemWidth(Px(120.0f));
             // Volume is remembered per profile, so it needs the profile id too.
             ImGui::BeginDisabled(muted || !identified);
             if (ImGui::SliderInt("##volume", &percent, 0, 200, "%d%%")) {
@@ -240,7 +264,7 @@ void DrawSettings() {
     if (settings.pushToTalk) {
         DrawPushToTalkKey();
     } else {
-        ImGui::SetNextItemWidth(220.0f);
+        ImGui::SetNextItemWidth(Px(220.0f));
         if (ImGui::SliderFloat("Activation level", &settings.activationThresholdDb, -80.0f, 0.0f, "%.0f dB")) {
             VoiceConfig::SetActivationThresholdDb(settings.activationThresholdDb);
             changed = true;
@@ -258,7 +282,7 @@ void DrawSettings() {
 
     ImGui::SeparatorText("Microphone");
     const std::string current = settings.inputDevice.empty() ? "System default" : settings.inputDevice;
-    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SetNextItemWidth(Px(220.0f));
     if (ImGui::BeginCombo("Device", current.c_str())) {
         if (ImGui::Selectable("System default", settings.inputDevice.empty())) {
             settings.inputDevice.clear();
@@ -275,7 +299,7 @@ void DrawSettings() {
         ImGui::EndCombo();
     }
     int inputPercent = static_cast<int>(std::lround(settings.inputVolume * 100.0f));
-    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SetNextItemWidth(Px(220.0f));
     if (ImGui::SliderInt("Mic volume", &inputPercent, 0, 200, "%d%%")) {
         settings.inputVolume = static_cast<float>(inputPercent) / 100.0f;
         VoiceConfig::SetInputVolume(settings.inputVolume);
@@ -308,7 +332,7 @@ void DrawSettings() {
 
     ImGui::SeparatorText("Listening");
     int volumePercent = static_cast<int>(std::lround(settings.volume * 100.0f));
-    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SetNextItemWidth(Px(220.0f));
     if (ImGui::SliderInt("Voice volume", &volumePercent, 0, 100, "%d%%")) {
         settings.volume = static_cast<float>(volumePercent) / 100.0f;
         VoiceConfig::SetVolume(settings.volume);
@@ -393,6 +417,12 @@ void DrawMenu() {
         DrawSettings();
         ImGui::EndMenu();
     }
+}
+
+void DrawPanel() {
+    g_inPanel = true;
+    DrawSettings();
+    g_inPanel = false;
 }
 
 void DrawOverlays() {

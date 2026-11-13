@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Voice chat's microphone. A runtime permission: the game asks for it the first time voice
+         chat is turned on (runtime/src/voice/voice_chat.cpp), never at startup. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- The launcher's disc image extraction runs as a foreground service that keeps the CPU awake. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />

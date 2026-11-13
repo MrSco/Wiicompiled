@@ -3005,6 +3005,7 @@ void DrawVrSettingsPanelWindow() {
             });
             tab("Controllers", DrawControllerSettings);
             tab("Audio", DrawAudioSettings);
+            tab("Voice chat", VoiceSettingsUi::DrawPanel);
             tab("Diagnostics", DrawDiagnosticsSettings);
             ImGui::EndTabBar();
         }
